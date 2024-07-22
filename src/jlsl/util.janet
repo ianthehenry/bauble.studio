@@ -31,3 +31,8 @@
 
 (defn ptuple? [x] (and (tuple? x) (= (tuple/type x) :parens)))
 (defn btuple? [x] (and (tuple? x) (= (tuple/type x) :brackets)))
+
+(defn contents= [a b]
+  (and
+    (= (length a) (length b))
+    (all = a b)))

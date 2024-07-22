@@ -4,32 +4,6 @@
 (use ./util)
 (use ./adt)
 
-(defadt function
-  (builtin name return-type arg-types)
-  (defined name return-type args body))
-
-(defmacro defbuiltin [sym return-type & arg-types]
-  ~(def ,(symbol "builtins/" sym)
-    (,function/builtin ',sym ,return-type ,(tuple/brackets ;arg-types))))
-
-(defbuiltin + :float :float :float)
-
-(defmodule function
-  (defn of-ast [sym]
-    (case sym
-      '+ ['quote builtins/+]
-      sym))
-
-  (defn to-glsl [t]
-    (function/match t
-      (builtin name _ _) name
-      (defined name _ _ _) name))
-
-  (defn return-type [t]
-    (function/match t
-      (builtin _ type _) type
-      (defined _ type _ _) type)))
-
 (defadt variable
   (dynamic name type)
   (lexical name type))
@@ -37,12 +11,64 @@
 (defmodule variable
   (defn to-glsl [t]
     (variable/match t
-      (dynamic name _) name
-      (lexical name _) name))
+      (dynamic name _) (symbol name)
+      (lexical name _) (symbol name)))
   (defn type [t]
     (variable/match t
       (dynamic _ type) type
       (lexical _ type) type)))
+
+(defadt function
+  (builtin name return-type arg-types)
+  (defined name return-type arg-types args body))
+
+(defmacro defbuiltin [sym return-type & arg-types]
+  ~(def ,(symbol "builtins/" sym)
+    (,function/builtin ,(string sym) ,return-type ,(tuple/brackets ;arg-types))))
+
+(defbuiltin + :float :float :float)
+(defbuiltin * :float :float :float)
+
+(defmodule function
+  (defn of-ast [sym]
+    (case sym
+      '+ ['quote builtins/+]
+      '* ['quote builtins/*]
+      sym))
+
+  (defn to-glsl [t]
+    (function/match t
+      (builtin name _ _) (symbol name)
+      (defined name _ _ _ _) (symbol name)))
+
+  (defn return-type [t]
+    (function/match t
+      (builtin _ type _) type
+      (defined _ type _ _ _) type))
+
+  # TODO: theoretically a single function can have multiple overloads,
+  # so we should be able to implement it multiple times. but we're not there yet.
+  (defn implement [t return-type args body]
+    (function/match t
+      (builtin _ _ _) (error "BUG: attempting to implement builtin function")
+      (defined name declared-return-type declared-arg-types current-args current-body) (do
+        (assertf (empty? current-body) "%s: cannot implement a function multiple times" name)
+        (assertf (not (empty? body)) "%s: cannot implement with empty body" name)
+        (def implemented-arg-types (map variable/type args))
+        (assertf (contents= declared-arg-types implemented-arg-types)
+          "%s: argument type mismatch, declared as %q implemented as %q"
+          name
+          declared-arg-types
+          implemented-arg-types)
+        (assertf (= declared-return-type return-type)
+          "%s: return type mismatch, declared as %q implemented as %q"
+          name
+          declared-return-type
+          return-type)
+        (array/concat current-body body)
+        (array/concat current-args args)))
+    t)
+  )
 
 (defadt primitive-type
   (float)
@@ -286,7 +312,10 @@
       [function & args] [statement/call (function/of-ast function) (map expr/of-ast args)]
     )))
 
-(defmacro- jlsl/defn [return-type name args & body]
+(defmacro- jlsl/declare [return-type name arg-types]
+  ~(def ,name (,function/defined ,(string name) ,(type/of-ast return-type) [,;(map type/of-ast arg-types)] @[] @[])))
+
+(defmacro- jlsl/implement [return-type name args & body]
   (def $return-type (gensym))
   (def $args (gensym))
   (def $body (gensym))
@@ -302,18 +331,143 @@
     (def ,$args [,;<args>])
     (def ,$body @[])
     ,;<body>
-    (,function/defined ,(string name) ,$return-type ,$args ,$body)))
+    (,function/implement ,name ,$return-type ,$args ,$body)))
+
+(defmacro- jlsl/defn [return-type name args & body]
+  # okay there's a very subtle bug here where
+  # we evaluate return-type and the argument return types twice,
+  # the first time without the function itself in scope, the
+  # next time with it in scope. really we should only evaluate it once.
+  # but i do not care.
+
+  ~(upscope
+    (as-macro ,jlsl/declare ,return-type ,name ,(map 0 (partition 2 args)))
+    (as-macro ,jlsl/implement ,return-type ,name ,args ,;body)))
+
+(defn render-arg [variable] [(type/to-glsl (variable/type variable)) (variable/to-glsl variable)])
+
+(defn observe [pred? structure f]
+  (def seen @{})
+  (prewalk (fn [x]
+    (if (in seen x)
+      nil
+      (do
+        (when (and (not= x structure) (pred? x)) (f x))
+        (put seen x true)
+        x)))
+    structure)
+  nil)
+
+(defn render-function-aux [finished in-progress forwards results function]
+  (when (in finished function)
+    (break))
+  (when (in in-progress function)
+    (put forwards function true)
+    (break))
+
+  (function/match function
+    (builtin _ _ _) nil
+    (defined name return-type _ args body) (do
+      (put in-progress function true)
+
+      (observe function? function
+        (partial render-function-aux finished in-progress forwards results))
+
+      # TODO: walk referenced functions and recurse them
+      # TODO: hoist free variables
+      # TODO: we need to come up with preferred glsl names for these variables now
+      (def glsl ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render-arg args)]
+        ,;(map statement/to-glsl body)))
+
+      (put in-progress function nil)
+      (array/push results glsl)
+      (put finished function true)
+      )))
+
+(defn render-function [function]
+  (def forwards @{})
+  (def results @[])
+  (render-function-aux @{} @{} forwards results function)
+  # TODO: actual forward declarations
+
+  (array/concat
+    (seq [function :keys forwards]
+      (function/match function
+        (builtin _ _ _) (error "BUG: cannot forward-declare a builtin function")
+        (defined name return-type _ args _)
+        ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render-arg args)])))
+    results))
+
+(test-macro (jlsl/declare :float incr [:float])
+  (def incr (@function/defined "incr" (@type/primitive (quote (<1> float))) [(@type/primitive (quote (<1> float)))] @[] @[])))
+(test-macro (jlsl/implement :float incr [:float x] (return x))
+  (do
+    (def <1> (@type/primitive (quote (<2> float))))
+    (def <3> [(def x (@variable/lexical "x" (@type/primitive (quote (<2> float)))))])
+    (def <4> @[])
+    (@array/push <4> (@statement/return (@expr/identifier x)))
+    (@implement incr <1> <3> <4>)))
+(test-macro (jlsl/defn :float incr [:float x] (return x))
+  (upscope
+    (as-macro @jlsl/declare :float incr @[:float])
+    (as-macro @jlsl/implement :float incr [:float x] (return x))))
+
+(test (render-function (jlsl/defn :float incr [:float x]
+  (return (+ x 1))))
+  @[[defn
+     :float
+     "incr"
+     [:float x]
+     [return [+ x 1]]]])
+
+(deftest "only referenced functions are not included"
+  (test (render-function (do
+    (jlsl/defn :float square [:float x]
+      (return (* x x)))
+
+    (jlsl/defn :float cube [:float x]
+      (return (* x x x)))
+
+    (jlsl/defn :float foo [:float x]
+      (return (+ (square x) 1)))))
+    @[[defn
+       :float
+       "square"
+       [:float x]
+       [return [* x x]]]
+      [defn
+       :float
+       "foo"
+       [:float x]
+       [return [+ [square x] 1]]]]))
+
+(deftest "mutually recursive functions generate forward declarations"
+  (test (render-function (do
+    (jlsl/declare :float bar [:float])
+
+    (jlsl/defn :float foo [:float x]
+      (return (bar x)))
+
+    (jlsl/implement :float bar [:float x]
+      (return (foo x)))))
+    @[[defn :float "bar" [:float x]]
+      [defn
+       :float
+       "foo"
+       [:float x]
+       [return [bar x]]]
+      [defn
+       :float
+       "bar"
+       [:float x]
+       [return [foo x]]]]))
 
 (test-macro (jlsl/defn :void foo [:float x :float y]
   (var x 1)
   (return [x 2 3]))
-  (do
-    (def <1> (quote (<2> void)))
-    (def <3> [(def x (@variable/lexical "x" (@type/primitive (quote (<4> float))))) (def y (@variable/lexical "y" (@type/primitive (quote (<4> float)))))])
-    (def <5> @[])
-    (@array/push <5> (upscope (def <6> (@expr/literal (quote (<2> primitive (<4> float))) 1)) (def <7> (@type <6>)) (def x (@variable/lexical "x" <7>)) (@statement/declaration false x <6>)))
-    (@array/push <5> (@statement/return (@vector (@expr/identifier x) (@expr/literal (quote (<2> primitive (<4> float))) 2) (@expr/literal (quote (<2> primitive (<4> float))) 3))))
-    (@function/defined "foo" <1> <3> <5>)))
+  (upscope
+    (as-macro @jlsl/declare :void foo @[:float :float])
+    (as-macro @jlsl/implement :void foo [:float x :float y] (var x 1) (return [x 2 3]))))
 
 (test (jlsl/defn :void foo [:float x :float y]
   (var z 1)
@@ -322,48 +476,50 @@
    defined
    "foo"
    [<2> void]
-   [[<3>
-     lexical
-     "x"
-     [<2> primitive [<4> float]]]
-    [<3>
-     lexical
-     "y"
-     [<2> primitive [<4> float]]]]
+   [[<2> primitive [<3> float]]
+    [<2> primitive [<3> float]]]
+   @[[<4>
+      lexical
+      "x"
+      [<2> primitive [<3> float]]]
+     [<4>
+      lexical
+      "y"
+      [<2> primitive [<3> float]]]]
    @[[<5>
       declaration
       false
-      [<3>
+      [<4>
        lexical
        "z"
-       [<2> primitive [<4> float]]]
+       [<2> primitive [<3> float]]]
       [<6>
        literal
-       [<2> primitive [<4> float]]
+       [<2> primitive [<3> float]]
        1]]
      [<5>
       return
       [<6>
        call
-       [<1> builtin + :float [:float :float]]
+       [<1> builtin "+" :float [:float :float]]
        @[[<6>
           identifier
-          [<3>
+          [<4>
            lexical
            "x"
-           [<2> primitive [<4> float]]]]
+           [<2> primitive [<3> float]]]]
          [<6>
           identifier
-          [<3>
+          [<4>
            lexical
            "y"
-           [<2> primitive [<4> float]]]]
+           [<2> primitive [<3> float]]]]
          [<6>
           identifier
-          [<3>
+          [<4>
            lexical
            "z"
-           [<2> primitive [<4> float]]]]]]]]])
+           [<2> primitive [<3> float]]]]]]]]])
 
 (test (jlsl/defn :void foo [:float x :float y]
   (var z 0)
@@ -374,93 +530,95 @@
    defined
    "foo"
    [<2> void]
-   [[<3>
-     lexical
-     "x"
-     [<2> primitive [<4> float]]]
-    [<3>
-     lexical
-     "y"
-     [<2> primitive [<4> float]]]]
+   [[<2> primitive [<3> float]]
+    [<2> primitive [<3> float]]]
+   @[[<4>
+      lexical
+      "x"
+      [<2> primitive [<3> float]]]
+     [<4>
+      lexical
+      "y"
+      [<2> primitive [<3> float]]]]
    @[[<5>
       declaration
       false
-      [<3>
+      [<4>
        lexical
        "z"
-       [<2> primitive [<4> float]]]
+       [<2> primitive [<3> float]]]
       [<6>
        literal
-       [<2> primitive [<4> float]]
+       [<2> primitive [<3> float]]
        0]]
      [<5>
       for
       [<5>
        declaration
        false
-       [<3>
+       [<4>
         lexical
         "i"
-        [<2> primitive [<4> float]]]
+        [<2> primitive [<3> float]]]
        [<6>
         literal
-        [<2> primitive [<4> float]]
+        [<2> primitive [<3> float]]
         0]]
       [<6>
        call
        @<
        @[[<6>
           identifier
-          [<3>
+          [<4>
            lexical
            "i"
-           [<2> primitive [<4> float]]]]
+           [<2> primitive [<3> float]]]]
          [<6>
           literal
-          [<2> primitive [<4> float]]
+          [<2> primitive [<3> float]]
           10]]]
       [<5>
        call
        @++
        @[[<6>
           identifier
-          [<3>
+          [<4>
            lexical
            "i"
-           [<2> primitive [<4> float]]]]]]
+           [<2> primitive [<3> float]]]]]]
       @[[<5>
          declaration
          nil
-         [<3>
+         [<4>
           lexical
           "z"
-          [<2> primitive [<4> float]]]
+          [<2> primitive [<3> float]]]
          [<6>
           identifier
-          [<3>
+          [<4>
            lexical
            "i"
-           [<2> primitive [<4> float]]]]]]]
+           [<2> primitive [<3> float]]]]]]]
      [<5>
       return
       [<6>
        call
-       [<1> builtin + :float [:float :float]]
+       [<1> builtin "+" :float [:float :float]]
        @[[<6>
           identifier
-          [<3>
+          [<4>
            lexical
            "x"
-           [<2> primitive [<4> float]]]]
+           [<2> primitive [<3> float]]]]
          [<6>
           identifier
-          [<3>
+          [<4>
            lexical
            "y"
-           [<2> primitive [<4> float]]]]
+           [<2> primitive [<3> float]]]]
          [<6>
           identifier
-          [<3>
+          [<4>
            lexical
            "z"
-           [<2> primitive [<4> float]]]]]]]]])
+           [<2> primitive [<3> float]]]]]]]]])
