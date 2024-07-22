@@ -40,7 +40,7 @@ Similarly,
   (return (pow x 2)))
 ```
 
-In that expression, `x` is a lexically-scoped variable. This not makes it harder to make typos, but it also allows us to track the types of identifiers and do some simple typechecking and type-driven overloading.
+In that expression, `x` is a lexically-scoped variable. This not only makes it harder to make typos, but it also allows us to track the types of identifiers. `jlsl` uses that type to do some simple typechecking and type-driven overloading.
 
 # vector punning
 
@@ -60,7 +60,7 @@ And:
 (vec3 p.xy z)
 ```
 
-It used type-directed disambiguation to know that you wanted the result to be a `vec3`.
+It uses type-directed disambiguation to know that you wanted the result to be a `vec3`.
 
 # dynamic variables
 
@@ -116,22 +116,8 @@ That will produce code like this:
 (defn :float distance [:vec3 p]
   (var p1 (- p (vec3 100 0 0)))
   (return (box p (vec3 50 100 50))))
-
-
-(defn :float distance []
-  (with [p (- p [100 0 0])]
-    (return (box (vec3 50 100 50)))))
 ```
 
 # coming soon
 
 `jlsl` also has a notion of typechecking. Except... that doesn't actually work yet.
-
-But there is nothing stopping you from writing code like this:
-
-Instead of symbols.
-
-Some differences:
-
-- 
-- type inference??

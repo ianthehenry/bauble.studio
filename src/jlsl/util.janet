@@ -28,3 +28,6 @@
 
 (defn >> [f g] |(g (f ;$&)))
 (defn << [f g] |(f (g ;$&)))
+
+(defn ptuple? [x] (and (tuple? x) (= (tuple/type x) :parens)))
+(defn btuple? [x] (and (tuple? x) (= (tuple/type x) :brackets)))
