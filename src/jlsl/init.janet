@@ -441,6 +441,16 @@
        [:float x]
        [return [+ [square x] 1]]]]))
 
+(deftest "recursive functions"
+  (test (render-function (do
+    (jlsl/defn :float foo [:float x]
+      (return (foo x)))))
+    @[[defn
+       :float
+       "foo"
+       [:float x]
+       [return [foo x]]]]))
+
 (deftest "mutually recursive functions generate forward declarations"
   (test (render-function (do
     (jlsl/declare :float bar [:float])
