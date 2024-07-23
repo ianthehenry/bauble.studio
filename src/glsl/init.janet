@@ -269,10 +269,13 @@
       (printer/newline p))
     ['defn type name args & body] (do
       (printer/prin p type " " (identifier name) "(" (format-args args) ")")
-      (printer/bracket-body p " {" "}"
-        (each statement body
-          (render-statement p statement)))
-      (printer/newline p))
+      (if (empty? body)
+        (printer/print p ";")
+        (do
+          (printer/bracket-body p " {" "}"
+            (each statement body
+              (render-statement p statement)))
+          (printer/newline p))))
     ['def type name value] (do
       (printer/prin p "const " type " " (identifier name) " = ")
       (render-expression p value)
@@ -286,7 +289,10 @@
     (printer/print p "#version " version))
   (var last-head nil)
   (each toplevel program
-    (def new-head (first toplevel))
+    (var new-head (first toplevel))
+    # group forward declarations together
+    (when (and (= new-head 'defn) (= (length toplevel) 4))
+      (set new-head :forward-declaration))
 
     (when (and last-head
         (or (= new-head 'defn)
@@ -503,6 +509,28 @@
       foo[0] = 10.0;
       foo[0] += 10.0;
       f(foo) *= 10.0;
+    }
+    
+  `))
+
+(deftest "forward function declarations"
+  (test-program [
+    (defn :float foo [:float x])
+    (defn :float bar [:float x])
+    (defn :float foo [:float x]
+      (return (+ (bar x) 1)))
+    (defn :float bar [:float x]
+      (return (+ (foo x) 1)))
+    ] `
+    float foo(float x);
+    float bar(float x);
+    
+    float foo(float x) {
+      return bar(x) + 1.0;
+    }
+    
+    float bar(float x) {
+      return foo(x) + 1.0;
     }
     
   `))
