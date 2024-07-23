@@ -205,6 +205,7 @@
       |symbol? [expr/identifier expr-ast]
       |stuple? [vector ;(map of-ast expr-ast)]
       [f & args] [expr/call (function/of-ast f) (map of-ast args)]
+      # TODO
       # [(and op (or '++ '--)) expr]
       # [(and op (or '_++ '_--)) expr]
       # ['if cond then else]
@@ -346,49 +347,30 @@
 
 (defn render-arg [variable] [(type/to-glsl (variable/type variable)) (variable/to-glsl variable)])
 
-(defn observe [pred? structure f]
-  (def seen @{})
-  (prewalk (fn [x]
-    (if (in seen x)
-      nil
-      (do
-        (when (and (not= x structure) (pred? x)) (f x))
-        (put seen x true)
-        x)))
-    structure)
-  nil)
-
-(defn render-function-aux [finished in-progress forwards results function]
-  (when (in finished function)
-    (break))
-  (when (in in-progress function)
-    (put forwards function true)
-    (break))
-
-  (function/match function
-    (builtin _ _ _) nil
-    (defined name return-type _ args body) (do
-      (put in-progress function true)
-
-      (observe function? function
-        (partial render-function-aux finished in-progress forwards results))
-
-      # TODO: walk referenced functions and recurse them
-      # TODO: hoist free variables
-      # TODO: we need to come up with preferred glsl names for these variables now
-      (def glsl ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render-arg args)]
-        ,;(map statement/to-glsl body)))
-
-      (put in-progress function nil)
-      (array/push results glsl)
-      (put finished function true)
-      )))
-
 (defn render-function [function]
   (def forwards @{})
   (def results @[])
-  (render-function-aux @{} @{} forwards results function)
-  # TODO: actual forward declarations
+  (def in-progress @{})
+  (def finished @{})
+
+  (visit function (fn [node visiting? stack]
+    (unless (function? node) (break))
+
+    (when visiting?
+      # we don't need a forward declaration for a direct recursive call
+      (unless (= node (find-last function? stack))
+        (put forwards node true))
+      (break))
+
+    (function/match node
+      (builtin _ _ _) nil
+      (defined name return-type _ args body) (do
+        # TODO: walk referenced functions and recurse them
+        # TODO: hoist free variables
+        # TODO: we need to come up with preferred glsl names for these variables>
+        (def glsl ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render-arg args)]
+          ,;(map statement/to-glsl body)))
+        (array/push results glsl)))))
 
   (array/concat
     (seq [function :keys forwards]
@@ -420,7 +402,7 @@
      [:float x]
      [return [+ x 1]]]])
 
-(deftest "only referenced functions are not included"
+(deftest "only referenced functions are included"
   (test (render-function (do
     (jlsl/defn :float square [:float x]
       (return (* x x)))
