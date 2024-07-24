@@ -313,8 +313,11 @@
       [function & args] [statement/call (function/of-ast function) (map expr/of-ast args)]
     )))
 
+(defmacro- jlsl/stub [return-type name arg-types]
+  ~(,function/defined ,name ,(type/of-ast return-type) [,;(map type/of-ast arg-types)] @[] @[]))
+
 (defmacro- jlsl/declare [return-type name arg-types]
-  ~(def ,name (,function/defined ,(string name) ,(type/of-ast return-type) [,;(map type/of-ast arg-types)] @[] @[])))
+  ~(def ,name (as-macro ,jlsl/stub ,return-type ,(string name) ,arg-types)))
 
 (defmacro- jlsl/implement [return-type name args & body]
   (def $return-type (gensym))
@@ -334,54 +337,23 @@
     ,;<body>
     (,function/implement ,name ,$return-type ,$args ,$body)))
 
-(defmacro- jlsl/defn [return-type name args & body]
-  # okay there's a very subtle bug here where
-  # we evaluate return-type and the argument return types twice,
-  # the first time without the function itself in scope, the
-  # next time with it in scope. really we should only evaluate it once.
-  # but i do not care.
+(defmacro- jlsl/fn [return-type name args & body]
+  # TODO: we don't really need as-macro; we could just invoke these
+  # ahead of thime
+  ~(as-macro ,jlsl/implement
+    ,return-type
+    (as-macro ,jlsl/stub ,return-type ,name ,(map 0 (partition 2 args)))
+    ,args
+    ,;body))
 
+(defmacro- jlsl/defn [return-type name args & body]
   ~(upscope
     (as-macro ,jlsl/declare ,return-type ,name ,(map 0 (partition 2 args)))
     (as-macro ,jlsl/implement ,return-type ,name ,args ,;body)))
 
-(defn render-arg [variable] [(type/to-glsl (variable/type variable)) (variable/to-glsl variable)])
-
-(defn render-function [function]
-  (def forwards @{})
-  (def results @[])
-  (def in-progress @{})
-  (def finished @{})
-
-  (visit function (fn [node visiting? stack]
-    (unless (function? node) (break))
-
-    (when visiting?
-      # we don't need a forward declaration for a direct recursive call
-      (unless (= node (find-last function? stack))
-        (put forwards node true))
-      (break))
-
-    (function/match node
-      (builtin _ _ _) nil
-      (defined name return-type _ args body) (do
-        # TODO: walk referenced functions and recurse them
-        # TODO: hoist free variables
-        # TODO: we need to come up with preferred glsl names for these variables>
-        (def glsl ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render-arg args)]
-          ,;(map statement/to-glsl body)))
-        (array/push results glsl)))))
-
-  (array/concat
-    (seq [function :keys forwards]
-      (function/match function
-        (builtin _ _ _) (error "BUG: cannot forward-declare a builtin function")
-        (defined name return-type _ args _)
-        ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render-arg args)])))
-    results))
-
 (test-macro (jlsl/declare :float incr [:float])
-  (def incr (@function/defined "incr" (@type/primitive (quote (<1> float))) [(@type/primitive (quote (<1> float)))] @[] @[])))
+  (def incr (as-macro @jlsl/stub :float "incr" [:float])))
+
 (test-macro (jlsl/implement :float incr [:float x] (return x))
   (do
     (def <1> (@type/primitive (quote (<2> float))))
@@ -393,66 +365,6 @@
   (upscope
     (as-macro @jlsl/declare :float incr @[:float])
     (as-macro @jlsl/implement :float incr [:float x] (return x))))
-
-(test (render-function (jlsl/defn :float incr [:float x]
-  (return (+ x 1))))
-  @[[defn
-     :float
-     "incr"
-     [:float x]
-     [return [+ x 1]]]])
-
-(deftest "only referenced functions are included"
-  (test (render-function (do
-    (jlsl/defn :float square [:float x]
-      (return (* x x)))
-
-    (jlsl/defn :float cube [:float x]
-      (return (* x x x)))
-
-    (jlsl/defn :float foo [:float x]
-      (return (+ (square x) 1)))))
-    @[[defn
-       :float
-       "square"
-       [:float x]
-       [return [* x x]]]
-      [defn
-       :float
-       "foo"
-       [:float x]
-       [return [+ [square x] 1]]]]))
-
-(deftest "recursive functions"
-  (test (render-function (do
-    (jlsl/defn :float foo [:float x]
-      (return (foo x)))))
-    @[[defn
-       :float
-       "foo"
-       [:float x]
-       [return [foo x]]]]))
-
-(deftest "mutually recursive functions generate forward declarations"
-  (test (render-function (do
-    (jlsl/declare :float bar [:float])
-
-    (jlsl/defn :float foo [:float x]
-      (return (bar x)))
-
-    (jlsl/implement :float bar [:float x]
-      (return (foo x)))))
-    @[[defn :float "bar" [:float x]]
-      [defn
-       :float
-       "foo"
-       [:float x]
-       [return [bar x]]]
-      [defn
-       :float
-       "bar"
-       [:float x]
-       [return [foo x]]]]))
 
 (test-macro (jlsl/defn :void foo [:float x :float y]
   (var x 1)
@@ -614,3 +526,128 @@
            lexical
            "z"
            [<2> primitive [<3> float]]]]]]]]])
+
+# ----------
+
+(defn render-arg [variable] [(type/to-glsl (variable/type variable)) (variable/to-glsl variable)])
+
+(defn render-function [function]
+  (def forwards @{})
+  (def results @[])
+  (def in-progress @{})
+  (def finished @{})
+
+  (visit function (fn [node visiting? stack]
+    (unless (function? node) (break))
+
+    (when visiting?
+      # we don't need a forward declaration for a direct recursive call
+      (unless (= node (find-last function? stack))
+        (put forwards node true))
+      (break))
+
+    (function/match node
+      (builtin _ _ _) nil
+      (defined name return-type _ args body) (do
+        # TODO: we should make sure we're actually generating a unique name
+        (def glsl-name (symbol name))
+        # TODO: walk referenced functions and recurse them
+        # TODO: hoist free variables
+        # TODO: we need to come up with preferred glsl names for these variables>
+        (def glsl ~(defn ,(type/to-glsl return-type) ,glsl-name [,;(mapcat render-arg args)]
+          ,;(map statement/to-glsl body)))
+        (array/push results glsl)))))
+
+  (array/concat
+    (seq [function :keys forwards]
+      (function/match function
+        (builtin _ _ _) (error "BUG: cannot forward-declare a builtin function")
+        (defined name return-type _ args _)
+        ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render-arg args)])))
+    results))
+
+(test (render-function (jlsl/defn :float incr [:float x]
+  (return (+ x 1))))
+  @[[defn
+     :float
+     incr
+     [:float x]
+     [return [+ x 1]]]])
+
+(deftest "only referenced functions are included"
+  (test (render-function (do
+    (jlsl/defn :float square [:float x]
+      (return (* x x)))
+
+    (jlsl/defn :float cube [:float x]
+      (return (* x x x)))
+
+    (jlsl/defn :float foo [:float x]
+      (return (+ (square x) 1)))))
+    @[[defn
+       :float
+       square
+       [:float x]
+       [return [* x x]]]
+      [defn
+       :float
+       foo
+       [:float x]
+       [return [+ [square x] 1]]]]))
+
+(deftest "recursive functions"
+  (test (render-function (do
+    (jlsl/defn :float foo [:float x]
+      (return (foo x)))))
+    @[[defn
+       :float
+       foo
+       [:float x]
+       [return [foo x]]]]))
+
+(deftest "mutually recursive functions generate forward declarations"
+  (test (render-function (do
+    (jlsl/declare :float bar [:float])
+
+    (jlsl/defn :float foo [:float x]
+      (return (bar x)))
+
+    (jlsl/implement :float bar [:float x]
+      (return (foo x)))))
+    @[[defn :float "bar" [:float x]]
+      [defn
+       :float
+       foo
+       [:float x]
+       [return [bar x]]]
+      [defn
+       :float
+       bar
+       [:float x]
+       [return [foo x]]]]))
+
+(deftest "anonymous functions"
+  (test (render-function
+    (jlsl/fn :float "foo" [:float x]
+      (return (+ x 1))))
+    @[[defn
+       :float
+       foo
+       [:float x]
+       [return [+ x 1]]]]))
+
+# TODO: alright, this is the one to beat
+(deftest "first-class functions automatically forward free variables"
+  (test (render-function
+    (jlsl/defn :float foo [:float x]
+      (return ((jlsl/fn :float "bar" [:float y] (return (* x y))) x))))
+    @[[defn
+       :float
+       bar
+       [:float y]
+       [return [* x y]]]
+      [defn
+       :float
+       foo
+       [:float x]
+       [return [bar x]]]]))
