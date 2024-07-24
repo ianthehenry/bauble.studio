@@ -317,7 +317,7 @@
   ~(,function/defined ,name ,(type/of-ast return-type) [,;(map type/of-ast arg-types)] @[] @[]))
 
 (defmacro- jlsl/declare [return-type name arg-types]
-  ~(def ,name (as-macro ,jlsl/stub ,return-type ,(string name) ,arg-types)))
+  ['def name (call jlsl/stub return-type (string name) arg-types)])
 
 (defmacro- jlsl/implement [return-type name args & body]
   (def $return-type (gensym))
@@ -338,21 +338,15 @@
     (,function/implement ,name ,$return-type ,$args ,$body)))
 
 (defmacro- jlsl/fn [return-type name args & body]
-  # TODO: we don't really need as-macro; we could just invoke these
-  # ahead of thime
-  ~(as-macro ,jlsl/implement
-    ,return-type
-    (as-macro ,jlsl/stub ,return-type ,name ,(map 0 (partition 2 args)))
-    ,args
-    ,;body))
+  (call jlsl/implement return-type (call jlsl/stub return-type name (map 0 (partition 2 args))) args ;body))
 
 (defmacro- jlsl/defn [return-type name args & body]
-  ~(upscope
-    (as-macro ,jlsl/declare ,return-type ,name ,(map 0 (partition 2 args)))
-    (as-macro ,jlsl/implement ,return-type ,name ,args ,;body)))
+  ['upscope
+    (call jlsl/declare return-type name (map 0 (partition 2 args)))
+    (call jlsl/implement return-type name args ;body)])
 
 (test-macro (jlsl/declare :float incr [:float])
-  (def incr (as-macro @jlsl/stub :float "incr" [:float])))
+  (def incr (@function/defined "incr" (@type/primitive (quote (<1> float))) [(@type/primitive (quote (<1> float)))] @[] @[])))
 
 (test-macro (jlsl/implement :float incr [:float x] (return x))
   (do
@@ -363,15 +357,26 @@
     (@implement incr <1> <3> <4>)))
 (test-macro (jlsl/defn :float incr [:float x] (return x))
   (upscope
-    (as-macro @jlsl/declare :float incr @[:float])
-    (as-macro @jlsl/implement :float incr [:float x] (return x))))
+    (def incr (@function/defined "incr" (@type/primitive (quote (<1> float))) [(@type/primitive (quote (<1> float)))] @[] @[]))
+    (do
+      (def <2> (@type/primitive (quote (<1> float))))
+      (def <3> [(def x (@variable/lexical "x" (@type/primitive (quote (<1> float)))))])
+      (def <4> @[])
+      (@array/push <4> (@statement/return (@expr/identifier x)))
+      (@implement incr <2> <3> <4>))))
 
 (test-macro (jlsl/defn :void foo [:float x :float y]
   (var x 1)
   (return [x 2 3]))
   (upscope
-    (as-macro @jlsl/declare :void foo @[:float :float])
-    (as-macro @jlsl/implement :void foo [:float x :float y] (var x 1) (return [x 2 3]))))
+    (def foo (@function/defined "foo" (quote (<1> void)) [(@type/primitive (quote (<2> float))) (@type/primitive (quote (<2> float)))] @[] @[]))
+    (do
+      (def <3> (quote (<1> void)))
+      (def <4> [(def x (@variable/lexical "x" (@type/primitive (quote (<2> float))))) (def y (@variable/lexical "y" (@type/primitive (quote (<2> float)))))])
+      (def <5> @[])
+      (@array/push <5> (upscope (def <6> (@expr/literal (quote (<1> primitive (<2> float))) 1)) (def <7> (@type <6>)) (def x (@variable/lexical "x" <7>)) (@statement/declaration false x <6>)))
+      (@array/push <5> (@statement/return (@vector (@expr/identifier x) (@expr/literal (quote (<1> primitive (<2> float))) 2) (@expr/literal (quote (<1> primitive (<2> float))) 3))))
+      (@implement foo <3> <4> <5>))))
 
 (test (jlsl/defn :void foo [:float x :float y]
   (var z 1)

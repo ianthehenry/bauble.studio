@@ -94,3 +94,7 @@
   1
   (1 1 1)
 `)
+
+# useful for invoking macros as regular functions
+(defn call [f & args]
+  (f ;args))
