@@ -8,6 +8,45 @@
   (dynamic name type)
   (lexical name type))
 
+(defadt primitive-type
+  (float)
+  (double)
+  (int)
+  (uint)
+  (bool))
+
+# TODO: I might want to separate a function and a function
+# implementation into different types.
+(defadt function
+  (builtin name return-type param-types)
+  (defined name return-type param-types params body scan-ref free-vars-ref))
+
+(defadt type
+  (void)
+  (primitive type)
+  (vec type count)
+  (struct name fields))
+
+(defadt expr
+  (literal type value)
+  (identifier variable)
+  (call function args))
+
+(defadt statement
+  (declaration const? variable expr)
+  (assign l-value r-value)
+  (update op l-value r-value)
+  (break)
+  (continue)
+  (return expr)
+  (do body)
+  (if cond then else)
+  (case value cases)
+  (while cond body)
+  (do-while cond body)
+  (for init cond update body)
+  (call function arguments))
+
 (defmodule variable
   (defn to-glsl [t]
     (variable/match t
@@ -18,10 +57,6 @@
       (dynamic _ type) type
       (lexical _ type) type)))
 
-(defadt function
-  (builtin name return-type arg-types)
-  (defined name return-type arg-types args body))
-
 (defmacro defbuiltin [sym return-type & arg-types]
   ~(def ,(symbol "builtins/" sym)
     (,function/builtin ,(string sym) ,return-type ,(tuple/brackets ;arg-types))))
@@ -30,6 +65,9 @@
 (defbuiltin * :float :float :float)
 
 (defmodule function
+  (defn new [name return-type arg-types]
+    (function/defined name return-type arg-types @[] @[] (ref/new) (ref/new)))
+
   (defn of-ast [sym]
     (case sym
       '+ ['quote builtins/+]
@@ -39,22 +77,22 @@
   (defn to-glsl [t]
     (function/match t
       (builtin name _ _) (symbol name)
-      (defined name _ _ _ _) (symbol name)))
+      (defined name _ _ _ _ _ _) (symbol name)))
 
   (defn return-type [t]
     (function/match t
       (builtin _ type _) type
-      (defined _ type _ _ _) type))
+      (defined _ type _ _ _ _ _) type))
 
   # TODO: theoretically a single function can have multiple overloads,
   # so we should be able to implement it multiple times. but we're not there yet.
-  (defn implement [t return-type args body]
+  (defn implement [t return-type params body]
     (function/match t
       (builtin _ _ _) (error "BUG: attempting to implement builtin function")
-      (defined name declared-return-type declared-arg-types current-args current-body) (do
+      (defined name declared-return-type declared-arg-types current-params current-body _ _) (do
         (assertf (empty? current-body) "%s: cannot implement a function multiple times" name)
         (assertf (not (empty? body)) "%s: cannot implement with empty body" name)
-        (def implemented-arg-types (map variable/type args))
+        (def implemented-arg-types (map variable/type params))
         (assertf (contents= declared-arg-types implemented-arg-types)
           "%s: argument type mismatch, declared as %q implemented as %q"
           name
@@ -66,16 +104,126 @@
           declared-return-type
           return-type)
         (array/concat current-body body)
-        (array/concat current-args args)))
+        (array/concat current-params params)))
     t)
-  )
 
-(defadt primitive-type
-  (float)
-  (double)
-  (int)
-  (uint)
-  (bool))
+  # returns free variables and all referenced functions
+  (defn scan [name body params]
+    (assertf (not (empty? body)) "%s: cannot find free variables of a function that has not been implemented yet" name)
+
+    (var scope (tabseq [variable :in params] variable true))
+    (var functions-called @{})
+
+    # a map from variables to an array of @[read? written?]
+    (def free-vars @{})
+    (defn free-entry [k] (get-or-put free-vars k @[false false]))
+    (defn mark [variable rw]
+      (case rw
+        :read (put (free-entry variable) 0 true)
+        :write (put (free-entry variable) 1 true)
+        (error "BUG")))
+
+    (defn see-expr [expr rw]
+      # TODO: this should consider a variable written
+      # to if it occurs on the left-hand side of a field
+      # or array access
+      (expr/match expr
+        (literal _ _) nil
+        (identifier variable)
+          (unless (in scope variable)
+            (mark variable rw))
+        (call function args) (do
+          (put functions-called function true)
+          # TODO: oh, this is interesting... if we
+          # call a function with inout arguments, we
+          # actually need to record that here
+          (each arg args (see-expr arg :read)))))
+
+    (var visit nil)
+    (defn block [statements]
+      (set scope (table/setproto @{} scope))
+      (each statement statements
+        (visit statement))
+      (set scope (table/getproto scope)))
+
+    (set visit (fn visit [statement]
+      (statement/match statement
+        (declaration const? variable expr) (do
+          (see-expr expr :read)
+          (put scope variable true))
+        (assign l-value r-value) (do
+          (see-expr l-value :write)
+          (see-expr r-value :read))
+        (update op l-value r-value) (do
+          (see-expr l-value :read)
+          (see-expr l-value :write)
+          (see-expr r-value :write))
+        (break) nil
+        (continue) nil
+        (return expr) (see-expr expr :read)
+        (do body) (block body)
+        (if cond then else) (do
+          (see-expr cond :read)
+          (visit then)
+          (visit else))
+        (case value cases) (do
+          (see-expr value :read)
+          (each case cases
+            (pat/match case
+              [body] (visit body)
+              [expr body] (do (see-expr expr :read) (visit body)))))
+        (while cond body) (do
+          (see-expr cond :read)
+          (block body))
+        (do-while cond body) (do
+          (see-expr cond :read)
+          (block body))
+        (for init cond update body) (do
+          (see-expr cond :read)
+          (block [init update ;body]))
+        (call function args) (do
+          # TODO: this is redundant with the expression code that does the same thing...
+          # ...and also should take into account inout parameters
+          (put functions-called function true)
+          (each arg args (see-expr arg :read))))))
+    (block body)
+
+    [free-vars (keys functions-called)])
+
+  (defn memoized-scan [t]
+    (function/match t
+      (builtin _ _ _) [[] []]
+      (defined name _ _ params body scan-ref _)
+        (ref/get-or-put scan-ref (scan name body params))))
+
+  (defn compute-free-variables [t]
+    (def result @{})
+
+    (defn union-variable [variable [read? written?]]
+      (if (has-key? result variable)
+        (let [[old-read? old-written?] (in result variable)]
+          (put result variable [(or read? old-read?) (or written? old-written?)]))
+        (put result variable [read? written?])))
+
+    (visit t
+      (fn [function visiting? _]
+        (when visiting? (break))
+        (def [vars _] (memoized-scan function))
+        (eachp [variable access-types] vars
+          (union-variable variable access-types)))
+      (fn [f function]
+        (def [_ functions] (memoized-scan function))
+        (each function functions
+          (f function))))
+    (keys result))
+
+  (defn free-variables [t]
+    (function/match t
+      (builtin _ _ _) []
+      (defined name _ _ _ _ _ free-vars-ref)
+        (ref/get-or-put free-vars-ref (compute-free-variables t))))
+
+  )
 
 (defmodule primitive-type
   (defn of-ast [ast]
@@ -101,12 +249,6 @@
       (int) "ivec"
       (uint) "uvec"
       (bool) "bvec")))
-
-(defadt type
-  (void)
-  (primitive type)
-  (vec type count)
-  (struct name fields))
 
 (defmodule type
   (def float (type/primitive (primitive-type/float)))
@@ -164,11 +306,6 @@
       (struct _ _) nil))
   )
 
-(defadt expr
-  (literal type value)
-  (identifier variable)
-  (call function args))
-
 (defmodule expr
   (defn to-glsl [t]
     (expr/match t
@@ -212,21 +349,6 @@
       # ['in expr key]
       # ['. expr key]
       )))
-
-(defadt statement
-  (declaration const? variable expr)
-  (assign l-value r-value)
-  (update op l-value r-value)
-  (break)
-  (continue)
-  (return expr)
-  (do body)
-  (if cond then else)
-  (case value cases)
-  (while cond body)
-  (do-while cond body)
-  (for init cond update body)
-  (call function arguments))
 
 (defmodule statement
   (defn to-glsl [t]
@@ -314,17 +436,17 @@
     )))
 
 (defmacro- jlsl/stub [return-type name arg-types]
-  ~(,function/defined ,name ,(type/of-ast return-type) [,;(map type/of-ast arg-types)] @[] @[]))
+  ~(,function/new ,name ,(type/of-ast return-type) [,;(map type/of-ast arg-types)]))
 
 (defmacro- jlsl/declare [return-type name arg-types]
   ['def name (call jlsl/stub return-type (string name) arg-types)])
 
-(defmacro- jlsl/implement [return-type name args & body]
+(defmacro- jlsl/implement [return-type name params & body]
   (def $return-type (gensym))
-  (def $args (gensym))
+  (def $params (gensym))
   (def $body (gensym))
 
-  (def <args> (seq [[type name] :in (partition 2 args)]
+  (def <params> (seq [[type name] :in (partition 2 params)]
     ~(def ,name (,variable/lexical ,(string name) ,(type/of-ast type)))))
 
   (def <body> (seq [statement-ast :in body]
@@ -332,21 +454,21 @@
 
   ~(do
     (def ,$return-type ,(type/of-ast return-type))
-    (def ,$args [,;<args>])
+    (def ,$params [,;<params>])
     (def ,$body @[])
     ,;<body>
-    (,function/implement ,name ,$return-type ,$args ,$body)))
+    (,function/implement ,name ,$return-type ,$params ,$body)))
 
-(defmacro- jlsl/fn [return-type name args & body]
-  (call jlsl/implement return-type (call jlsl/stub return-type name (map 0 (partition 2 args))) args ;body))
+(defmacro- jlsl/fn [return-type name params & body]
+  (call jlsl/implement return-type (call jlsl/stub return-type name (map 0 (partition 2 params))) params ;body))
 
-(defmacro- jlsl/defn [return-type name args & body]
+(defmacro- jlsl/defn [return-type name params & body]
   ['upscope
-    (call jlsl/declare return-type name (map 0 (partition 2 args)))
-    (call jlsl/implement return-type name args ;body)])
+    (call jlsl/declare return-type name (map 0 (partition 2 params)))
+    (call jlsl/implement return-type name params ;body)])
 
 (test-macro (jlsl/declare :float incr [:float])
-  (def incr (@function/defined "incr" (@type/primitive (quote (<1> float))) [(@type/primitive (quote (<1> float)))] @[] @[])))
+  (def incr (@new "incr" (@type/primitive (quote (<1> float))) [(@type/primitive (quote (<1> float)))])))
 
 (test-macro (jlsl/implement :float incr [:float x] (return x))
   (do
@@ -357,7 +479,7 @@
     (@implement incr <1> <3> <4>)))
 (test-macro (jlsl/defn :float incr [:float x] (return x))
   (upscope
-    (def incr (@function/defined "incr" (@type/primitive (quote (<1> float))) [(@type/primitive (quote (<1> float)))] @[] @[]))
+    (def incr (@new "incr" (@type/primitive (quote (<1> float))) [(@type/primitive (quote (<1> float)))]))
     (do
       (def <2> (@type/primitive (quote (<1> float))))
       (def <3> [(def x (@variable/lexical "x" (@type/primitive (quote (<1> float)))))])
@@ -369,7 +491,7 @@
   (var x 1)
   (return [x 2 3]))
   (upscope
-    (def foo (@function/defined "foo" (quote (<1> void)) [(@type/primitive (quote (<2> float))) (@type/primitive (quote (<2> float)))] @[] @[]))
+    (def foo (@new "foo" (quote (<1> void)) [(@type/primitive (quote (<2> float))) (@type/primitive (quote (<2> float)))]))
     (do
       (def <3> (quote (<1> void)))
       (def <4> [(def x (@variable/lexical "x" (@type/primitive (quote (<2> float))))) (def y (@variable/lexical "y" (@type/primitive (quote (<2> float)))))])
@@ -428,7 +550,9 @@
           [<4>
            lexical
            "z"
-           [<2> primitive [<3> float]]]]]]]]])
+           [<2> primitive [<3> float]]]]]]]]
+   @[]
+   @[]])
 
 (test (jlsl/defn :void foo [:float x :float y]
   (var z 0)
@@ -530,7 +654,9 @@
           [<4>
            lexical
            "z"
-           [<2> primitive [<3> float]]]]]]]]])
+           [<2> primitive [<3> float]]]]]]]]
+   @[]
+   @[]])
 
 # ----------
 
@@ -553,13 +679,13 @@
 
     (function/match node
       (builtin _ _ _) nil
-      (defined name return-type _ args body) (do
+      (defined name return-type _ params body _ _) (do
+        (assertf (not (empty? body)) "%s: unimplemented function" name)
         # TODO: we should make sure we're actually generating a unique name
         (def glsl-name (symbol name))
-        # TODO: walk referenced functions and recurse them
         # TODO: hoist free variables
-        # TODO: we need to come up with preferred glsl names for these variables>
-        (def glsl ~(defn ,(type/to-glsl return-type) ,glsl-name [,;(mapcat render-arg args)]
+        # TODO: we need to come up with preferred glsl names for these variables
+        (def glsl ~(defn ,(type/to-glsl return-type) ,glsl-name [,;(mapcat render-arg params)]
           ,;(map statement/to-glsl body)))
         (array/push results glsl)))))
 
@@ -567,8 +693,8 @@
     (seq [function :keys forwards]
       (function/match function
         (builtin _ _ _) (error "BUG: cannot forward-declare a builtin function")
-        (defined name return-type _ args _)
-        ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render-arg args)])))
+        (defined name return-type _ params _ _ _)
+        ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render-arg params)])))
     results))
 
 (test (render-function (jlsl/defn :float incr [:float x]
@@ -640,6 +766,93 @@
        foo
        [:float x]
        [return [+ x 1]]]]))
+
+(deftest "function with no free variables"
+  (test (function/free-variables
+    (jlsl/fn :float "name" [:float x]
+      (return (+ x 1))))
+    @[]))
+
+(deftest "function with simple free variable"
+  (def free (variable/lexical "free" type/float))
+
+  (test (function/free-variables
+    (jlsl/fn :float "name" [:float x]
+      (return (+ x free))))
+    @[[<1>
+       lexical
+       "free"
+       [<2> primitive [<3> float]]]]))
+
+(deftest "function that calls another function with a free variable"
+  (def free (variable/lexical "free" type/float))
+
+  (test (function/free-variables (do
+    (jlsl/defn :float foo [:float x]
+      (return (+ x free)))
+
+    (jlsl/fn :float "name" [:float x]
+      (return (foo x)))))
+    @[[<1>
+       lexical
+       "free"
+       [<2> primitive [<3> float]]]]))
+
+(deftest "recursive functions with free variables"
+  (def free (variable/lexical "free" type/float))
+  (test (function/free-variables (do
+    (jlsl/defn :float foo [:float x]
+      (return (foo (+ x free))))))
+    @[[<1>
+       lexical
+       "free"
+       [<2> primitive [<3> float]]]]))
+
+(deftest "mutually recursive functions with free variables"
+  (def free (variable/lexical "free" type/float))
+  (test (function/free-variables (do
+    (jlsl/declare :float bar [:float])
+
+    (jlsl/defn :float foo [:float x]
+      (return (bar (+ x free))))
+
+    (jlsl/implement :float bar [:float x]
+      (return (foo x)))))
+    @[[<1>
+       lexical
+       "free"
+       [<2> primitive [<3> float]]]])
+
+  (def free2 (variable/lexical "free2" type/float))
+  (test (function/free-variables (do
+    (jlsl/declare :float bar [:float])
+
+    (jlsl/defn :float foo [:float x]
+      (return (bar (+ x free2))))
+
+    (jlsl/implement :float bar [:float x]
+      (return (foo (+ x free))))))
+    @[[<1>
+       lexical
+       "free2"
+       [<2> primitive [<3> float]]]
+      [<1>
+       lexical
+       "free"
+       [<2> primitive [<3> float]]]])
+  )
+
+# TODO: this is a problem; we need variables to have reference-equality
+(deftest "variables should be reference-unique"
+  (def free1 (variable/lexical "free" type/float))
+  (def free2 (variable/lexical "free" type/float))
+  (test (function/free-variables (do
+    (jlsl/defn :float foo [:float x]
+      (return (+ x free1 free2)))))
+    @[[<1>
+       lexical
+       "free"
+       [<2> primitive [<3> float]]]]))
 
 # TODO: alright, this is the one to beat
 (deftest "first-class functions automatically forward free variables"

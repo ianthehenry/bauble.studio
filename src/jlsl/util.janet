@@ -1,4 +1,5 @@
 (use judge)
+(use module)
 (import pat)
 
 (defn unprefix [sym]
@@ -64,7 +65,9 @@
 # A node will never be visited more than once, which has implications
 # for nodes which are value-equal to other nodes. Duplicate nodes will
 # never be visited again.
-(defn visit [structure f]
+(def- core/walk walk)
+(defn visit [structure f &opt walk]
+  (default walk core/walk)
   (def visiting @{})
   (def visited @{})
   (def stack @[])
@@ -98,3 +101,41 @@
 # useful for invoking macros as regular functions
 (defn call [f & args]
   (f ;args))
+
+(defmacro get-or-put [t k v]
+  (with-syms [$t $k $v]
+    ~(let [,$t ,t ,$k ,k]
+      (if (,has-key? ,$t ,$k)
+        (,in ,$t ,$k)
+        (let [,$v ,v]
+          (,put ,$t ,$k ,$v)
+          ,$v)))))
+
+(test-macro (get-or-put @{} 1 2)
+  (let [<1> @{} <2> 1]
+    (if (@has-key? <1> <2>)
+      (@in <1> <2>)
+      (let [<3> 2]
+        (@put <1> <2> <3>)
+        <3>))))
+
+(defmodule ref
+  (defn new [] @[])
+  (defn get [t &opt dflt] (if (empty? t) dflt (in t 0)))
+  (defn set [t x] (put t 0 x))
+  (defmacro get-or-put [t v]
+    (with-syms [$t $v]
+      ~(let [,$t ,t]
+        (if (,empty? ,$t)
+          (let [,$v ,v]
+            (,put ,$t 0 ,$v)
+            ,$v)
+          (,in ,$t 0))))))
+
+(test-macro (ref/get-or-put x y)
+  (let [<1> x]
+    (if (@empty? <1>)
+      (let [<2> y]
+        (@put <1> 0 <2>)
+        <2>)
+      (@in <1> 0))))
