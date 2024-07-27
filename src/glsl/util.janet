@@ -48,3 +48,7 @@
 (test-stdout (wrap-when false (prin "(") (prin "body") (prin ")")) `
   body
 `)
+
+
+(defn ptuple? [x] (and (tuple? x) (= (tuple/type x) :parens)))
+(defn btuple? [x] (and (tuple? x) (= (tuple/type x) :brackets)))

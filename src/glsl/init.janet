@@ -253,8 +253,8 @@
 
 (defn- format-args [args]
   (->
-    (seq [[type arg] :in (partition 2 args)]
-      (string/join [;(string/split ":" type) (identifier arg)] " "))
+    (seq [[sig arg] :in (partition 2 args)]
+      (string/join [;(if (btuple? sig) sig [sig]) (identifier arg)] " "))
     (string/join ", ")))
 
 (test (format-args [:foo 'name :bar 'other]) "foo name, bar other")
@@ -338,7 +338,7 @@
 
 (deftest "out parameters"
   (test-program [
-    (defn :void hello [out:float foo]
+    (defn :void hello [[out :float] foo]
       (set foo 10))
     ] `
     void hello(out float foo) {
