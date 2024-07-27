@@ -140,4 +140,7 @@
       (@in <1> 0))))
 
 (defn zip [& xs]
+  (assert (> (length xs) 0) "nothing to zip")
+  (def len (length (in xs 0)))
+  (assertf (all |(= len (length $)) xs) "zip length mismatch")
   (apply map tuple xs))

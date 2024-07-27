@@ -5,8 +5,8 @@
 (use ./adt)
 
 (defadt variable
-  (dynamic name type)
-  (lexical name type))
+  (dynamic id name type)
+  (lexical id name type))
 
 (defadt primitive-type
   (float)
@@ -103,14 +103,17 @@
   )
 
 (defmodule variable
+  (defn new [name type] (variable/lexical (gensym) name type))
+  (defn dyn [name type] (variable/dynamic (gensym) name type))
+
   (defn to-glsl [t]
     (variable/match t
-      (dynamic name _) (symbol name)
-      (lexical name _) (symbol name)))
+      (dynamic _ name _) (symbol name)
+      (lexical _ name _) (symbol name)))
   (defn type [t]
     (variable/match t
-      (dynamic _ type) type
-      (lexical _ type) type)))
+      (dynamic _ _ type) type
+      (lexical _ _ type) type)))
 
 (defmodule param-sig
   (defn new [type access] [type access])
@@ -440,7 +443,7 @@
           ~(upscope
             (def ,$expr ,(expr/of-ast value))
             (def ,$type (,expr/type ,$expr))
-            (def ,name (,variable/lexical ,(string name) ,$type))
+            (def ,name (,variable/new ,(string name) ,$type))
             (,statement/declaration ,const? ,name ,$expr)))
       ['set dest value] [statement/assign (expr/of-ast dest) (expr/of-ast value)]
       ['return value] [statement/return (expr/of-ast value)]
@@ -488,7 +491,7 @@
     (with-syms [$sig]
       ~(upscope
         (def ,$sig ,<sig>)
-        (def ,name (,variable/lexical ,(string name) (,param-sig/type ,$sig)))
+        (def ,name (,variable/new ,(string name) (,param-sig/type ,$sig)))
         (,param/new ,name ,$sig)))))
 
   (def <body> (seq [statement-ast :in body]
@@ -515,7 +518,7 @@
 (test-macro (jlsl/implement :float incr [:float x] (return x))
   (do
     (def <1> (@type/primitive (quote (<2> float))))
-    (def <3> [(upscope (def <4> (@new (@type/primitive (quote (<2> float))) :in)) (def x (@variable/lexical "x" (@type <4>))) (@new x <4>))])
+    (def <3> [(upscope (def <4> (@new (@type/primitive (quote (<2> float))) :in)) (def x (@new "x" (@type <4>))) (@new x <4>))])
     (def <5> @[])
     (@array/push <5> (@statement/return (@expr/identifier x)))
     (@implement incr <1> <3> <5>)))
@@ -524,7 +527,7 @@
     (def incr (@new "incr" (@type/primitive (quote (<1> float))) [(@new (@type/primitive (quote (<1> float))) :in)]))
     (do
       (def <2> (@type/primitive (quote (<1> float))))
-      (def <3> [(upscope (def <4> (@new (@type/primitive (quote (<1> float))) :in)) (def x (@variable/lexical "x" (@type <4>))) (@new x <4>))])
+      (def <3> [(upscope (def <4> (@new (@type/primitive (quote (<1> float))) :in)) (def x (@new "x" (@type <4>))) (@new x <4>))])
       (def <5> @[])
       (@array/push <5> (@statement/return (@expr/identifier x)))
       (@implement incr <2> <3> <5>))))
@@ -536,9 +539,9 @@
     (def foo (@new "foo" (quote (<1> void)) [(@new (@type/primitive (quote (<2> float))) :in) (@new (@type/primitive (quote (<2> float))) :in)]))
     (do
       (def <3> (quote (<1> void)))
-      (def <4> [(upscope (def <5> (@new (@type/primitive (quote (<2> float))) :in)) (def x (@variable/lexical "x" (@type <5>))) (@new x <5>)) (upscope (def <6> (@new (@type/primitive (quote (<2> float))) :in)) (def y (@variable/lexical "y" (@type <6>))) (@new y <6>))])
+      (def <4> [(upscope (def <5> (@new (@type/primitive (quote (<2> float))) :in)) (def x (@new "x" (@type <5>))) (@new x <5>)) (upscope (def <6> (@new (@type/primitive (quote (<2> float))) :in)) (def y (@new "y" (@type <6>))) (@new y <6>))])
       (def <7> @[])
-      (@array/push <7> (upscope (def <8> (@expr/literal (quote (<1> primitive (<2> float))) 1)) (def <9> (@type <8>)) (def x (@variable/lexical "x" <9>)) (@statement/declaration false x <8>)))
+      (@array/push <7> (upscope (def <8> (@expr/literal (quote (<1> primitive (<2> float))) 1)) (def <9> (@type <8>)) (def x (@new "x" <9>)) (@statement/declaration false x <8>)))
       (@array/push <7> (@statement/return (@vector (@expr/identifier x) (@expr/literal (quote (<1> primitive (<2> float))) 2) (@expr/literal (quote (<1> primitive (<2> float))) 3))))
       (@implement foo <3> <4> <7>))))
 
@@ -553,28 +556,31 @@
     [[<2> primitive [<3> float]] :in]]
    @[[[<4>
        lexical
+       <5>
        "x"
        [<2> primitive [<3> float]]]
       [[<2> primitive [<3> float]] :in]]
      [[<4>
        lexical
+       <6>
        "y"
        [<2> primitive [<3> float]]]
       [[<2> primitive [<3> float]] :in]]]
-   @[[<5>
+   @[[<7>
       declaration
       false
       [<4>
        lexical
+       <8>
        "z"
        [<2> primitive [<3> float]]]
-      [<6>
+      [<9>
        literal
        [<2> primitive [<3> float]]
        1]]
-     [<5>
+     [<7>
       return
-      [<6>
+      [<9>
        call
        [<1>
         builtin
@@ -582,22 +588,25 @@
         :float
         [[[<2> primitive [<3> float]] :in]
          [[<2> primitive [<3> float]] :in]]]
-       @[[<6>
+       @[[<9>
           identifier
           [<4>
            lexical
+           <5>
            "x"
            [<2> primitive [<3> float]]]]
-         [<6>
+         [<9>
           identifier
           [<4>
            lexical
+           <6>
            "y"
            [<2> primitive [<3> float]]]]
-         [<6>
+         [<9>
           identifier
           [<4>
            lexical
+           <8>
            "z"
            [<2> primitive [<3> float]]]]]]]]
    @[]
@@ -616,76 +625,84 @@
     [[<2> primitive [<3> float]] :in]]
    @[[[<4>
        lexical
+       <5>
        "x"
        [<2> primitive [<3> float]]]
       [[<2> primitive [<3> float]] :in]]
      [[<4>
        lexical
+       <6>
        "y"
        [<2> primitive [<3> float]]]
       [[<2> primitive [<3> float]] :in]]]
-   @[[<5>
+   @[[<7>
       declaration
       false
       [<4>
        lexical
+       <8>
        "z"
        [<2> primitive [<3> float]]]
-      [<6>
+      [<9>
        literal
        [<2> primitive [<3> float]]
        0]]
-     [<5>
+     [<7>
       for
-      [<5>
+      [<7>
        declaration
        false
        [<4>
         lexical
+        <10>
         "i"
         [<2> primitive [<3> float]]]
-       [<6>
+       [<9>
         literal
         [<2> primitive [<3> float]]
         0]]
-      [<6>
+      [<9>
        call
        @<
-       @[[<6>
+       @[[<9>
           identifier
           [<4>
            lexical
+           <10>
            "i"
            [<2> primitive [<3> float]]]]
-         [<6>
+         [<9>
           literal
           [<2> primitive [<3> float]]
           10]]]
-      [<5>
+      [<7>
        call
        @++
-       @[[<6>
+       @[[<9>
           identifier
           [<4>
            lexical
+           <10>
            "i"
            [<2> primitive [<3> float]]]]]]
-      @[[<5>
+      @[[<7>
          declaration
          nil
          [<4>
           lexical
+          <11>
           "z"
           [<2> primitive [<3> float]]]
-         [<6>
+         [<9>
           identifier
           [<4>
            lexical
+           <10>
            "i"
            [<2> primitive [<3> float]]]]]]]
-     [<5>
+     [<7>
       return
-      [<6>
+      [<9>
        call
        [<1>
         builtin
@@ -693,22 +710,25 @@
         :float
         [[[<2> primitive [<3> float]] :in]
          [[<2> primitive [<3> float]] :in]]]
-       @[[<6>
+       @[[<9>
           identifier
           [<4>
            lexical
+           <5>
            "x"
            [<2> primitive [<3> float]]]]
-         [<6>
+         [<9>
           identifier
           [<4>
            lexical
+           <6>
            "y"
            [<2> primitive [<3> float]]]]
-         [<6>
+         [<9>
           identifier
           [<4>
            lexical
+           <8>
            "z"
            [<2> primitive [<3> float]]]]]]]]
    @[]
@@ -848,18 +868,19 @@
     @[]))
 
 (deftest "function with simple free variable"
-  (def free (variable/lexical "free" type/float))
+  (def free (variable/new "free" type/float))
 
   (test (function/free-variables
     (jlsl/fn :float "name" [:float x]
       (return (+ x free))))
     @[[<1>
        lexical
+       <2>
        "free"
-       [<2> primitive [<3> float]]]]))
+       [<3> primitive [<4> float]]]]))
 
 (deftest "function that calls another function with a free variable"
-  (def free (variable/lexical "free" type/float))
+  (def free (variable/new "free" type/float))
 
   (test (function/free-variables (do
     (jlsl/defn :float foo [:float x]
@@ -869,21 +890,23 @@
       (return (foo x)))))
     @[[<1>
        lexical
+       <2>
        "free"
-       [<2> primitive [<3> float]]]]))
+       [<3> primitive [<4> float]]]]))
 
 (deftest "recursive functions with free variables"
-  (def free (variable/lexical "free" type/float))
+  (def free (variable/new "free" type/float))
   (test (function/free-variables (do
     (jlsl/defn :float foo [:float x]
       (return (foo (+ x free))))))
     @[[<1>
        lexical
+       <2>
        "free"
-       [<2> primitive [<3> float]]]]))
+       [<3> primitive [<4> float]]]]))
 
 (deftest "mutually recursive functions with free variables"
-  (def free (variable/lexical "free" type/float))
+  (def free (variable/new "free" type/float))
   (test (function/free-variables (do
     (jlsl/declare :float bar [:float])
 
@@ -894,10 +917,11 @@
       (return (foo x)))))
     @[[<1>
        lexical
+       <2>
        "free"
-       [<2> primitive [<3> float]]]])
+       [<3> primitive [<4> float]]]])
 
-  (def free2 (variable/lexical "free2" type/float))
+  (def free2 (variable/new "free" type/float))
   (test (function/free-variables (do
     (jlsl/declare :float bar [:float])
 
@@ -908,25 +932,41 @@
       (return (foo (+ x free))))))
     @[[<1>
        lexical
-       "free2"
-       [<2> primitive [<3> float]]]
+       <2>
+       "free"
+       [<3> primitive [<4> float]]]
       [<1>
        lexical
+       <5>
        "free"
-       [<2> primitive [<3> float]]]])
+       [<3> primitive [<4> float]]]])
   )
 
-# TODO: this is a problem; we need variables to have reference-equality
 (deftest "variables should be reference-unique"
-  (def free1 (variable/lexical "free" type/float))
-  (def free2 (variable/lexical "free" type/float))
+  (def free1 (variable/new "free" type/float))
+  (def free2 (variable/new "free" type/float))
   (test (function/free-variables (do
     (jlsl/defn :float foo [:float x]
-      (return (+ x free1 free2)))))
+      (return (+ x (+ free1 free2))))))
     @[[<1>
        lexical
+       <2>
        "free"
-       [<2> primitive [<3> float]]]]))
+       [<3> primitive [<4> float]]]
+      [<1>
+       lexical
+       <5>
+       "free"
+       [<3> primitive [<4> float]]]]))
+
+# TODO: we should support different implementations
+(deftest "builtins are variadic"
+  (def free1 (variable/new "free" type/float))
+  (def free2 (variable/new "free" type/float))
+  (test-error (function/free-variables (do
+    (jlsl/defn :float foo [:float x]
+      (return (+ x free1 free2)))))
+    "zip length mismatch"))
 
 # TODO: alright, this is the one to beat
 (deftest "first-class functions automatically forward free variables"
