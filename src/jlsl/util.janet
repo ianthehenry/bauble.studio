@@ -16,12 +16,6 @@
 (defmacro assertf [x & args]
   ~(assert ,x (string/format ,;args)))
 
-(defn stuple? [t]
-  (and (tuple? t) (= (tuple/type t) :brackets)))
-
-(test (stuple? [1 2 3]) false)
-(test (stuple? '[1 2 3]) true)
-
 (defn get-unique [f ind]
   (pat/match (distinct (map f ind))
     [unique] unique
@@ -32,6 +26,11 @@
 
 (defn ptuple? [x] (and (tuple? x) (= (tuple/type x) :parens)))
 (defn btuple? [x] (and (tuple? x) (= (tuple/type x) :brackets)))
+
+(test (btuple? [1 2 3]) false)
+(test (btuple? '[1 2 3]) true)
+(test (ptuple? [1 2 3]) true)
+(test (ptuple? '[1 2 3]) false)
 
 (defn contents= [a b]
   (and
@@ -139,3 +138,6 @@
         (@put <1> 0 <2>)
         <2>)
       (@in <1> 0))))
+
+(defn zip [& xs]
+  (apply map tuple xs))
