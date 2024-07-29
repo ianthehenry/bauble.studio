@@ -40,7 +40,7 @@
       (uint) "uvec"
       (bool) "bvec")))
 
-# TODO: matrices
+# TODO: matrices, arrays
 (defadt type
   (void)
   (primitive type)
@@ -58,6 +58,9 @@
   (def uint (type/primitive (primitive-type/uint)))
   (def double (type/primitive (primitive-type/double)))
   (def bool (type/primitive (primitive-type/bool)))
+  (def vec2 (type/vec (primitive-type/float) 2))
+  (def vec3 (type/vec (primitive-type/float) 3))
+  (def vec4 (type/vec (primitive-type/float) 4))
 
   (defn of-ast [ast]
     (case ast
@@ -101,11 +104,30 @@
       (struct _ _) (error "vectors cannot contain compound entries")))
 
   (defn base-type [t]
-    # TODO: arrays, probably
     (type/match t
       (primitive t) t
       (vec t _) t
       (struct _ _) nil))
+
+  (defn- is-vector-field? [field]
+    (or (string/check-set "xyzw" field)
+        (string/check-set "rgba" field)
+        (string/check-set "stpq" field)))
+
+  (defn field-type [t field]
+    (type/match t
+      (primitive t) (errorf "cannot access field %q of primitive type" field)
+      (vec t count)
+        (if (is-vector-field? field)
+          (let [len (length field)]
+            (cond
+              (= len 1) (type/primitive t)
+              (and (>= len 2) (<= len 4)) (type/vec t len)
+              (errorf "cannot create a vector with %d components" len)))
+          (errorf "unknown vector field %q" field))
+      (struct name fields)
+        (or (in fields field)
+          (errorf "%s: unknown field %q" name field))))
   )
 
 (defmodule variable
@@ -170,7 +192,8 @@
 (defadt expr
   (literal type value)
   (identifier variable)
-  (call function args))
+  (call function args)
+  (dot expr field))
 
 (defadt statement
   (declaration const? variable expr)
@@ -270,9 +293,6 @@
         (error "BUG")))
 
     (defn see-expr [expr rw]
-      # TODO: this should consider a variable written
-      # to if it occurs on the left-hand side of a field
-      # or array access
       (expr/match expr
         (literal _ _) nil
         (identifier variable)
@@ -285,7 +305,8 @@
               :in (see-expr arg :read)
               :out (see-expr arg :write)
               :inout (do (see-expr arg :read) (see-expr arg :write))
-              access (errorf "BUG: unknown access qualifier %q" access))))))
+              access (errorf "BUG: unknown access qualifier %q" access))))
+        (dot expr _) (see-expr expr rw)))
 
     (var visit nil)
     (defn block [statements]
@@ -396,13 +417,15 @@
     (expr/match t
       (literal _ value) value
       (identifier variable) (variable/to-glsl variable)
-      (call function args) [(function/to-glsl function) ;(map to-glsl args)]))
+      (call function args) [(function/to-glsl function) ;(map to-glsl args)]
+      (dot expr field) ['. (to-glsl expr) field]))
 
   (defn type [t]
     (expr/match t
       (literal type _) type
       (identifier variable) (variable/type variable)
-      (call function _) (function/return-type function)))
+      (call function _) (function/return-type function)
+      (dot expr field) (type/field-type (type expr) field)))
 
   (defn vector [& exprs]
     (assert (not (empty? exprs)) "vector cannot be empty")
@@ -426,13 +449,13 @@
       |number? [expr/literal ['quote type/float] expr-ast]
       |symbol? [expr/identifier expr-ast]
       |btuple? [vector ;(map of-ast expr-ast)]
+      ['. expr key] [expr/dot (of-ast expr) ['quote key]]
       [f & args] [expr/call (function/of-ast f) (map of-ast args)]
       # TODO
       # [(and op (or '++ '--)) expr]
       # [(and op (or '_++ '_--)) expr]
       # ['if cond then else]
       # ['in expr key]
-      # ['. expr key]
       )))
 
 (defmodule statement
@@ -959,6 +982,32 @@
         "free"
         [<3> primitive [<4> float]]]
        [[<3> primitive [<4> float]] :inout]]]))
+
+
+(deftest "outness projects through field and array access"
+  (def free1 (variable/new "free1" type/vec3))
+  (def free2 (variable/new "free2" type/vec3))
+
+  (test (function/implicit-params
+    (jlsl/fn :float "name" [:float x]
+      (set (. free1 x) 100)
+      (+= (. free2 xyz) 100)
+      # TODO: add arrays here, once we add arrays
+      # (set ((in free2 0) x) 100)
+      (return x)))
+    @[[[<1>
+        lexical
+        <2>
+        "free1"
+        [<3> vec [<4> float] 3]]
+       [[<3> vec [<4> float] 3] :out]]
+      [[<1>
+        lexical
+        <5>
+        "free2"
+        [<3> vec [<4> float] 3]]
+       [[<3> vec [<4> float] 3] :inout]]]))
+
 
 (deftest "function that calls another function with a free variable"
   (def free (variable/new "free" type/float))
