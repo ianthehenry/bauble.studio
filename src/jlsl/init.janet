@@ -804,7 +804,10 @@
       (or (bimap/in (dyn *identifier-map*) variable)
         (errorf "BUG: variable %q is not in scope. This shouldn't happen, but it happened. How did it happen?"
           variable))
-    (call function args) [(function/to-glsl function) ;(map render/expr args)]
+    (call function args)
+      [(function/to-glsl function)
+        ;(map render/expr args)
+        ;(map |(render/expr (expr/identifier (param/var $))) (function/implicit-params function))]
     (dot expr field) ['. (render/expr expr) field]))
 
 (defmacro subscope [& exprs]
@@ -1197,9 +1200,7 @@
        [do [var :float x2 20]]
        [return 1]]]))
 
-# TODO: alright, this is the one to beat. we correctly generate the
-# implicit parameter but not yet the argument
-(deftest "first-class functions automatically forward free variables"
+(deftest "function calls automatically forward free variables"
   (test (render/function
     (jlsl/defn :float foo [:float x]
       (return ((jlsl/fn :float "bar" [:float y] (return (* x y))) x))))
@@ -1212,4 +1213,61 @@
        :float
        foo
        [:float x]
-       [return [bar x]]]]))
+       [return [bar x x]]]]))
+
+(deftest "free variable forwarding happens through function calls"
+  (def free (variable/new "free" type/float))
+  (test (render/function (do
+    (jlsl/defn :float qux [:float x]
+      (return (+ x free)))
+
+    (jlsl/defn :float bar [:float x]
+      (return (qux x)))
+
+    (jlsl/defn :float foo [:float x]
+      (return (bar x)))))
+    @[[defn
+       :float
+       qux
+       [:float x :float free]
+       [return [+ x free]]]
+      [defn
+       :float
+       bar
+       [:float x :float free]
+       [return [qux x free]]]
+      [defn
+       :float
+       foo
+       [:float x :float free]
+       [return [bar x free]]]]))
+
+(deftest "free variable forwarding happens even with mutual recursion"
+  (def free (variable/new "free" type/float))
+  (test (render/function (do
+    (jlsl/declare :float foo [:float])
+
+    (jlsl/defn :float bar [:float x]
+      (return (foo x)))
+
+    (jlsl/defn :float qux [:float x]
+      (return (+ x free)))
+
+    (jlsl/implement :float foo [:float x]
+      (return (+ (bar x) (qux x))))))
+    @[[defn :float "foo" [:float x]]
+      [defn
+       :float
+       bar
+       [:float x :float free]
+       [return [foo x free]]]
+      [defn
+       :float
+       qux
+       [:float x :float free]
+       [return [+ x free]]]
+      [defn
+       :float
+       foo
+       [:float x :float free]
+       [return [+ [bar x free] [qux x free]]]]]))
