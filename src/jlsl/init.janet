@@ -932,6 +932,34 @@
         [<3> primitive [<4> float]]]
        [[<3> primitive [<4> float]] :in]]]))
 
+(deftest "function with out free variable"
+  (def free (variable/new "free" type/float))
+
+  (test (function/implicit-params
+    (jlsl/fn :float "name" [:float x]
+      (set free 100)
+      (return x)))
+    @[[[<1>
+        lexical
+        <2>
+        "free"
+        [<3> primitive [<4> float]]]
+       [[<3> primitive [<4> float]] :out]]]))
+
+(deftest "function with inout free variable"
+  (def free (variable/new "free" type/float))
+
+  (test (function/implicit-params
+    (jlsl/fn :float "name" [:float x]
+      (+= free 100)
+      (return x)))
+    @[[[<1>
+        lexical
+        <2>
+        "free"
+        [<3> primitive [<4> float]]]
+       [[<3> primitive [<4> float]] :inout]]]))
+
 (deftest "function that calls another function with a free variable"
   (def free (variable/new "free" type/float))
 
