@@ -134,6 +134,11 @@
   (defn new [name type] (variable/lexical (gensym) name type))
   (defn dyn [name type] (variable/dynamic (gensym) name type))
 
+  (defn name [t]
+    (variable/match t
+      (dynamic _ name _) name
+      (lexical _ name _) name))
+
   (defn type [t]
     (variable/match t
       (dynamic _ _ type) type
@@ -769,25 +774,60 @@
 
 # ----------
 
-(defn render/variable [t]
-  (variable/match t
-    (dynamic _ name _) (symbol name)
-    (lexical _ name _) (symbol name)))
+(defdyn *identifier-map*)
+(def core/dyn dyn)
+(defn dyn [dynvar]
+  (or (core/dyn dynvar) (errorf "%q is not set" dynvar)))
 
-(defn render/expr [t]
+(defmodule bimap
+  (defn new [&opt proto]
+    (if proto
+      [(table/setproto @{} (in proto 0))
+       (table/setproto @{} (in proto 1))]
+       [@{} @{}]))
+  (def- core/in in)
+  (def- core/put put)
+  (def- core/has-key? has-key?)
+  (defn in [[forward _] key] (core/in forward key))
+  (defn out [[_ backward] value] (core/in backward value))
+  (defn put [[forward backward] k v]
+    (core/put forward k v)
+    (core/put backward v k)
+    v)
+  (defn has-key? [[forward _] k] (core/has-key? forward k))
+  (defn has-value? [[_ backward] v] (core/has-key? backward v)))
+
+(defn render/expr [t] # and *identifier-map*
   (expr/match t
     (literal _ value) value
-    (identifier variable) (render/variable variable)
+    (identifier variable)
+      (or (bimap/in (dyn *identifier-map*) variable)
+        (errorf "BUG: variable %q is not in scope. This shouldn't happen, but it happened. How did it happen?"
+          variable))
     (call function args) [(function/to-glsl function) ;(map render/expr args)]
     (dot expr field) ['. (render/expr expr) field]))
 
-(defn render/statement [t]
+(defmacro subscope [& exprs]
+  ~(with-dyns [,*identifier-map* (,bimap/new (,dyn ,*identifier-map*))]
+    ,;exprs))
+
+(defn new-identifier [variable] # and *identifier-map*
+  (def identifier-map (dyn *identifier-map*))
+  (var identifier (symbol (variable/name variable)))
+  # there might be a more efficient way to do this, but who cares
+  (var i 1)
+  (while (bimap/has-value? identifier-map identifier)
+    (set identifier (symbol (variable/name variable) i))
+    (++ i))
+  (bimap/put identifier-map variable identifier))
+
+(defn render/statement [t] # and *identifier-map*
   (statement/match t
-    (declaration const? variable expr)
+    (declaration const? variable expr) (do
       [(if const? 'def 'var)
         (type/to-glsl (variable/type variable))
-        (render/variable variable)
-        (render/expr expr)]
+        (new-identifier variable)
+        (render/expr expr)])
     (assign l-value r-value)
       ['set (render/expr l-value) (render/expr r-value)]
     (update op l-value r-value)
@@ -796,7 +836,7 @@
     (discard) ['discard]
     (continue) ['continue]
     (return expr) ['return (render/expr expr)]
-    (do body) ['do ;(map render/statement body)]
+    (do body) (subscope ['do ;(map render/statement body)])
     (if cond then else)
       ['if (render/expr cond) (render/statement then) ;(if else [(render/statement else)] [])]
     (case value cases)
@@ -804,15 +844,16 @@
         (pat/match case
           [body] [(render/statement body)]
           [value body] [(render/expr value) (render/statement body)]))]
-    (while cond body) ['while (render/expr cond) ;(map render/statement body)]
-    (do-while cond body) ['do-while (render/expr cond) ;(map render/statement body)]
+    (while cond body) (subscope ['while (render/expr cond) ;(map render/statement body)])
+    (do-while cond body) ['do-while (render/expr cond) ;(subscope (map render/statement body))]
+    # TODO: `for` scopes are hella weird
     (for init cond update body)
-      ['for (render/expr init) (render/expr cond) (render/statement update) ;(map render/statement body)]
+      (subscope ['for (render/expr init) (render/expr cond) (render/statement update) ;(map render/statement body)])
     (call function arguments)
       [(function/to-glsl function) ;(map render/expr arguments)]))
 
-(defn render/param [param]
-  [(param-sig/to-glsl (param/sig param)) (render/variable (param/var param))])
+(defn render/param [param] # and *identifier-map*
+  [(param-sig/to-glsl (param/sig param)) (new-identifier (param/var param))])
 
 (defn render/function [function]
   (def forwards @{})
@@ -831,23 +872,25 @@
 
     (function/match node
       (builtin _ _ _) nil
-      (defined name return-type _ params body _ _ _) (do
-        (assertf (not (empty? body)) "%s: unimplemented function" name)
-        (def implicit-params (function/implicit-params node))
-        # TODO: we should make sure we're actually generating a unique name
-        (def glsl-name (symbol name))
-        # TODO: hoist free variables
-        # TODO: we need to come up with preferred glsl names for these variables
-        (def glsl ~(defn ,(type/to-glsl return-type) ,glsl-name [,;(mapcat render/param [;params ;implicit-params])]
-          ,;(map render/statement body)))
-        (array/push results glsl)))))
+      (defined name return-type _ params body _ _ _)
+        (with-dyns [*identifier-map* (bimap/new)]
+          (assertf (not (empty? body)) "%s: unimplemented function" name)
+          (def implicit-params (function/implicit-params node))
+          # TODO: we should make sure we're actually generating a unique name
+          (def glsl-name (symbol name))
+          # TODO: hoist free variables
+          # TODO: we need to come up with preferred glsl names for these variables
+          (def glsl ~(defn ,(type/to-glsl return-type) ,glsl-name [,;(mapcat render/param [;params ;implicit-params])]
+            ,;(map render/statement body)))
+          (array/push results glsl)))))
 
   (array/concat
     (seq [function :keys forwards]
       (function/match function
         (builtin _ _ _) (error "BUG: cannot forward-declare a builtin function")
         (defined name return-type _ params _ _ _ _)
-        ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render/param params)])))
+          (with-dyns [*identifier-map* (bimap/new)]
+            ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render/param params)]))))
     results))
 
 (test (render/function (jlsl/defn :float incr [:float x]
@@ -1112,6 +1155,47 @@
     (jlsl/defn :float foo [:float x]
       (return (+ x free1 free2)))))
     "zip length mismatch"))
+
+(deftest "variables always get unique identifiers"
+  (def free1 (variable/new "free" type/float))
+  (def free2 (variable/new "free" type/float))
+  (def free3 (variable/new "x" type/float))
+  (def free4 (variable/new "y" type/float))
+  (test (render/function
+    (jlsl/defn :float foo [:float x]
+      (return (+ (+ free1 free2) (+ free3 free4)))))
+    @[[defn
+       :float
+       foo
+       [:float
+        x
+        :float
+        free
+        :float
+        free1
+        :float
+        x1
+        :float
+        y]
+       [return [+ [+ free free1] [+ x1 y]]]]]))
+
+# TODO: we could optimize this, and realize that the shadow is allowed if the other identifier
+# is not referenced again in the current scope. But... that is a micro-optimization of the
+# aesthetics of the generated code.
+(deftest "variables get unique identifiers even if they're shadowing another lexical variable"
+  (test (render/function
+    (jlsl/defn :float foo [:float x]
+      (var x 10)
+      (do
+        (var x 20))
+      (return 1)))
+    @[[defn
+       :float
+       foo
+       [:float x]
+       [var :float x1 10]
+       [do [var :float x2 20]]
+       [return 1]]]))
 
 # TODO: alright, this is the one to beat. we correctly generate the
 # implicit parameter but not yet the argument
