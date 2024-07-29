@@ -484,8 +484,9 @@
 
     (pat/match ast
       # TODO: we have no way to declare a variable without any initial value
-      [(map {'def true 'var false} const?) name value]
+      [(and declaration (or 'def 'var)) name value]
         (with-syms [$expr $type $statement]
+          (def const? (= declaration 'def))
           ~(upscope
             (def ,$expr ,(expr/of-ast value))
             (def ,$type (,expr/type ,$expr))
@@ -733,13 +734,15 @@
            "i"
            [<2> primitive [<3> float]]]]]]
       @[[<7>
-         declaration
-         nil
-         [<4>
-          lexical
-          <11>
-          "z"
-          [<2> primitive [<3> float]]]
+         update
+         @+=
+         [<9>
+          identifier
+          [<4>
+           lexical
+           <8>
+           "z"
+           [<2> primitive [<3> float]]]]
          [<9>
           identifier
           [<4>
@@ -778,7 +781,7 @@
            <8>
            "z"
            [<2> primitive [<3> float]]]]]]]]
-   @[[<12> unscanned]]
+   @[[<11> unscanned]]
    @[]
    @[]])
 
