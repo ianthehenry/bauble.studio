@@ -134,10 +134,6 @@
   (defn new [name type] (variable/lexical (gensym) name type))
   (defn dyn [name type] (variable/dynamic (gensym) name type))
 
-  (defn to-glsl [t]
-    (variable/match t
-      (dynamic _ name _) (symbol name)
-      (lexical _ name _) (symbol name)))
   (defn type [t]
     (variable/match t
       (dynamic _ _ type) type
@@ -413,13 +409,6 @@
   )
 
 (defmodule expr
-  (defn to-glsl [t]
-    (expr/match t
-      (literal _ value) value
-      (identifier variable) (variable/to-glsl variable)
-      (call function args) [(function/to-glsl function) ;(map to-glsl args)]
-      (dot expr field) ['. (to-glsl expr) field]))
-
   (defn type [t]
     (expr/match t
       (literal type _) type
@@ -459,36 +448,6 @@
       )))
 
 (defmodule statement
-  (defn to-glsl [t]
-    (statement/match t
-      (declaration const? variable expr)
-        [(if const? 'def 'var)
-          (type/to-glsl (variable/type variable))
-          (variable/to-glsl variable)
-          (expr/to-glsl expr)]
-      (assign l-value r-value)
-        ['set (expr/to-glsl l-value) (expr/to-glsl r-value)]
-      (update op l-value r-value)
-        [op (expr/to-glsl l-value) (expr/to-glsl r-value)]
-      (break) ['break]
-      (discard) ['discard]
-      (continue) ['continue]
-      (return expr) ['return (expr/to-glsl expr)]
-      (do body) ['do ;(map to-glsl body)]
-      (if cond then else)
-        ['if (expr/to-glsl cond) (to-glsl then) ;(if else [(to-glsl else)] [])]
-      (case value cases)
-        ['case ;(catseq [case :in cases]
-          (pat/match case
-            [body] [(to-glsl body)]
-            [value body] [(expr/to-glsl value) (to-glsl body)]))]
-      (while cond body) ['while (expr/to-glsl cond) ;(map to-glsl body)]
-      (do-while cond body) ['do-while (expr/to-glsl cond) ;(map to-glsl body)]
-      (for init cond update body)
-        ['for (expr/to-glsl init) (expr/to-glsl cond) (to-glsl update) ;(map to-glsl body)]
-      (call function arguments)
-        [(function/to-glsl function) ;(map expr/to-glsl arguments)]))
-
   (var of-ast nil)
 
   # takes a list of ASTs and returns code that you can evaluate
@@ -810,10 +769,52 @@
 
 # ----------
 
-(defn render-param [param]
-  [(param-sig/to-glsl (param/sig param)) (variable/to-glsl (param/var param))])
+(defn render/variable [t]
+  (variable/match t
+    (dynamic _ name _) (symbol name)
+    (lexical _ name _) (symbol name)))
 
-(defn render-function [function]
+(defn render/expr [t]
+  (expr/match t
+    (literal _ value) value
+    (identifier variable) (render/variable variable)
+    (call function args) [(function/to-glsl function) ;(map render/expr args)]
+    (dot expr field) ['. (render/expr expr) field]))
+
+(defn render/statement [t]
+  (statement/match t
+    (declaration const? variable expr)
+      [(if const? 'def 'var)
+        (type/to-glsl (variable/type variable))
+        (render/variable variable)
+        (render/expr expr)]
+    (assign l-value r-value)
+      ['set (render/expr l-value) (render/expr r-value)]
+    (update op l-value r-value)
+      [op (render/expr l-value) (render/expr r-value)]
+    (break) ['break]
+    (discard) ['discard]
+    (continue) ['continue]
+    (return expr) ['return (render/expr expr)]
+    (do body) ['do ;(map render/statement body)]
+    (if cond then else)
+      ['if (render/expr cond) (render/statement then) ;(if else [(render/statement else)] [])]
+    (case value cases)
+      ['case ;(catseq [case :in cases]
+        (pat/match case
+          [body] [(render/statement body)]
+          [value body] [(render/expr value) (render/statement body)]))]
+    (while cond body) ['while (render/expr cond) ;(map render/statement body)]
+    (do-while cond body) ['do-while (render/expr cond) ;(map render/statement body)]
+    (for init cond update body)
+      ['for (render/expr init) (render/expr cond) (render/statement update) ;(map render/statement body)]
+    (call function arguments)
+      [(function/to-glsl function) ;(map render/expr arguments)]))
+
+(defn render/param [param]
+  [(param-sig/to-glsl (param/sig param)) (render/variable (param/var param))])
+
+(defn render/function [function]
   (def forwards @{})
   (def results @[])
   (def in-progress @{})
@@ -837,8 +838,8 @@
         (def glsl-name (symbol name))
         # TODO: hoist free variables
         # TODO: we need to come up with preferred glsl names for these variables
-        (def glsl ~(defn ,(type/to-glsl return-type) ,glsl-name [,;(mapcat render-param [;params ;implicit-params])]
-          ,;(map statement/to-glsl body)))
+        (def glsl ~(defn ,(type/to-glsl return-type) ,glsl-name [,;(mapcat render/param [;params ;implicit-params])]
+          ,;(map render/statement body)))
         (array/push results glsl)))))
 
   (array/concat
@@ -846,10 +847,10 @@
       (function/match function
         (builtin _ _ _) (error "BUG: cannot forward-declare a builtin function")
         (defined name return-type _ params _ _ _ _)
-        ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render-param params)])))
+        ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render/param params)])))
     results))
 
-(test (render-function (jlsl/defn :float incr [:float x]
+(test (render/function (jlsl/defn :float incr [:float x]
   (return (+ x 1))))
   @[[defn
      :float
@@ -858,7 +859,7 @@
      [return [+ x 1]]]])
 
 (deftest "only referenced functions are included"
-  (test (render-function (do
+  (test (render/function (do
     (jlsl/defn :float square [:float x]
       (return (* x x)))
 
@@ -879,7 +880,7 @@
        [return [+ [square x] 1]]]]))
 
 (deftest "recursive functions"
-  (test (render-function (do
+  (test (render/function (do
     (jlsl/defn :float foo [:float x]
       (return (foo x)))))
     @[[defn
@@ -889,7 +890,7 @@
        [return [foo x]]]]))
 
 (deftest "mutually recursive functions generate forward declarations"
-  (test (render-function (do
+  (test (render/function (do
     (jlsl/declare :float bar [:float])
 
     (jlsl/defn :float foo [:float x]
@@ -910,7 +911,7 @@
        [return [foo x]]]]))
 
 (deftest "anonymous functions"
-  (test (render-function
+  (test (render/function
     (jlsl/fn :float "foo" [:float x]
       (return (+ x 1))))
     @[[defn
@@ -920,7 +921,7 @@
        [return [+ x 1]]]]))
 
 (deftest "function with out and inout parameters"
-  (test (render-function (do
+  (test (render/function (do
     (jlsl/defn :float foo [:float x [in :float] y [out :float] z [inout :float] w]
       (return (foo x y z w)))))
     @[[defn
@@ -1115,7 +1116,7 @@
 # TODO: alright, this is the one to beat. we correctly generate the
 # implicit parameter but not yet the argument
 (deftest "first-class functions automatically forward free variables"
-  (test (render-function
+  (test (render/function
     (jlsl/defn :float foo [:float x]
       (return ((jlsl/fn :float "bar" [:float y] (return (* x y))) x))))
     @[[defn
