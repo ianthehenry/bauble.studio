@@ -119,7 +119,11 @@
         <3>))))
 
 (defmodule ref
-  (defn new [] @[])
+  (defn new [& args]
+    (case (length args)
+      0 @[]
+      1 @[(in args 0)]
+      (error "too many arguments to ref/new")))
   (defn get [t &opt dflt] (if (empty? t) dflt (in t 0)))
   (defn set [t x] (put t 0 x))
   (defmacro get-or-put [t v]
