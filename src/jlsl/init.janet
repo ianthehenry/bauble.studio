@@ -164,6 +164,7 @@
   (update op l-value r-value)
   (break)
   (continue)
+  (discard)
   (return expr)
   (do body)
   (if cond then else)
@@ -284,6 +285,7 @@
           (see-expr r-value :write))
         (break) nil
         (continue) nil
+        (discard) nil
         (return expr) (see-expr expr :read)
         (do body) (block body)
         (if cond then else) (do

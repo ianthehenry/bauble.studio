@@ -179,6 +179,7 @@
       (render-expression p value))
     ['break] (printer/prin p "break")
     ['continue] (printer/prin p "continue")
+    ['discard] (printer/prin p "discard")
     [(and op (or
       '+= '*= '/= '-= '%=
       'blshift= 'brshift=
