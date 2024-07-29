@@ -400,12 +400,12 @@
       (builtin _ _ _) []
       (defined name _ _ _ _ _ _ implicit-params-ref)
         (ref/get-or-put implicit-params-ref
-          (seq [[variable [read? write?]] :pairs (free-var-accesses t)]
+          (sort (seq [[variable [read? write?]] :pairs (free-var-accesses t)]
             (param/new variable (param-sig/new (variable/type variable) (cond
               (and read? write?) :inout
               read? :in
               write? :out
-              (error "BUG: free variable not actually used"))))))))
+              (error "BUG: free variable not actually used")))))))))
   )
 
 (defmodule expr
