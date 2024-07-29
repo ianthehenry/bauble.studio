@@ -282,7 +282,7 @@
         (update op l-value r-value) (do
           (see-expr l-value :read)
           (see-expr l-value :write)
-          (see-expr r-value :write))
+          (see-expr r-value :read))
         (break) nil
         (continue) nil
         (discard) nil
