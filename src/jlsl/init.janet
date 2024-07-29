@@ -40,11 +40,17 @@
       (uint) "uvec"
       (bool) "bvec")))
 
+# TODO: matrices
 (defadt type
   (void)
   (primitive type)
   (vec type count)
   (struct name fields))
+
+(defadt free-vars
+  (unscanned)
+  (unresolved free-variables function-references)
+  (resolved free-variables))
 
 (defmodule type
   (def float (type/primitive (primitive-type/float)))
@@ -151,7 +157,15 @@
 # implementation into different types.
 (defadt function
   (builtin name return-type param-sigs)
-  (defined name return-type param-sigs params body scan-ref free-vars-ref))
+  (defined
+    name
+    return-type
+    param-sigs
+    params
+    body
+    scan-ref
+    free-var-access-ref
+    implicit-params-ref))
 
 (defadt expr
   (literal type value)
@@ -184,7 +198,16 @@
 
 (defmodule function
   (defn new [name return-type param-sigs]
-    (function/defined name return-type param-sigs @[] @[] (ref/new) (ref/new)))
+    (function/defined
+      name
+      return-type
+      param-sigs
+      @[] # params
+      @[] # body
+      (ref/new (free-vars/unscanned)) # scan-ref
+      (ref/new) # free-var-access-ref
+      (ref/new) # implicit-params-ref
+      ))
 
   (defn of-ast [sym]
     (case sym
@@ -195,24 +218,24 @@
   (defn to-glsl [t]
     (function/match t
       (builtin name _ _) (symbol name)
-      (defined name _ _ _ _ _ _) (symbol name)))
+      (defined name _ _ _ _ _ _ _) (symbol name)))
 
   (defn param-sigs [t]
     (function/match t
       (builtin _ _ param-sigs) param-sigs
-      (defined _ _ param-sigs _ _ _ _) param-sigs))
+      (defined _ _ param-sigs _ _ _ _ _) param-sigs))
 
   (defn return-type [t]
     (function/match t
       (builtin _ type _) type
-      (defined _ type _ _ _ _ _) type))
+      (defined _ type _ _ _ _ _ _) type))
 
   # TODO: theoretically a single function can have multiple overloads,
   # so we should be able to implement it multiple times. but we're not there yet.
   (defn implement [t return-type params body]
     (function/match t
       (builtin _ _ _) (error "BUG: attempting to implement builtin function")
-      (defined name declared-return-type declared-param-sigs current-params current-body _ _) (do
+      (defined name declared-return-type declared-param-sigs current-params current-body _ _ _) (do
         (assertf (empty? current-body) "%s: cannot implement a function multiple times" name)
         (assertf (not (empty? body)) "%s: cannot implement with empty body" name)
         (def implemented-param-sigs (map param/sig params))
@@ -256,7 +279,7 @@
           (unless (in scope variable)
             (mark variable rw))
         (call function args) (do
-          (put functions-called function true)
+          (put functions-called function (table/proto-flatten scope))
           (each [arg param-sig] (zip args (param-sigs function))
             (match (param-sig/access param-sig)
               :in (see-expr arg :read)
@@ -310,42 +333,62 @@
         (call function args) (see-expr (expr/call function args)))))
     (block body)
 
-    [free-vars (keys functions-called)])
+    [free-vars functions-called])
 
   (defn memoized-scan [t]
     (function/match t
-      (builtin _ _ _) [[] []]
-      (defined name _ _ params body scan-ref _)
-        (ref/get-or-put scan-ref (scan name body params))))
+      (builtin _ _ _) [[] {}]
+      (defined name _ _ params body scan-ref _ _)
+        (free-vars/match (ref/get scan-ref)
+          (unscanned) (do
+            (def [free-vars functions] (scan name body params))
+            (ref/set scan-ref (free-vars/unresolved free-vars functions))
+            [free-vars functions])
+          (unresolved free-vars functions) [free-vars functions]
+          (resolved free-vars) [free-vars {}])))
 
-  (defn compute-free-variables [t]
-    (def result @{})
+    (var free-var-accesses nil)
 
-    (defn union-variable [variable [read? written?]]
-      (if (has-key? result variable)
-        (let [[old-read? old-written?] (in result variable)]
-          (put result variable [(or read? old-read?) (or written? old-written?)]))
-        (put result variable [read? written?])))
+    (defn union-variable [into variable [read? written?]]
+      (if (has-key? into variable)
+        (let [[old-read? old-written?] (in into variable)]
+          (put into variable [(or read? old-read?) (or written? old-written?)]))
+        (put into variable [read? written?])))
 
-    (visit t
-      (fn [function visiting? _]
-        (when visiting? (break))
-        (def [vars _] (memoized-scan function))
-        (eachp [variable access-types] vars
-          (union-variable variable access-types)))
-      (fn [f function]
-        (def [_ functions] (memoized-scan function))
-        (each function functions
-          (f function))))
-    # TODO: this ignores read-writeness of the variables
-    (keys result))
+    (defn compute-free-var-accesses [t]
+      (def result @{})
+      (def [free-vars functions] (memoized-scan t))
+      (eachp [variable access-types] free-vars
+        (union-variable result variable access-types))
+      (eachp [function bound-vars] functions
+        (def free-var-set (free-var-accesses function))
+        (loop [[free-var access-types] :pairs free-var-set
+               :unless (in bound-vars free-var)]
+          (union-variable result free-var access-types)))
+      result)
 
-  (defn free-variables [t]
+  (set free-var-accesses (fn free-var-accesses [t]
+    (function/match t
+      (builtin _ _ _) @{}
+      (defined name _ _ _ _ _ free-var-access-ref _) (do
+        (if (= (ref/get free-var-access-ref) :computing) @{}
+          (do
+            (ref/set free-var-access-ref :computing)
+            (def result (compute-free-var-accesses t))
+            (ref/set free-var-access-ref result)
+            result))))))
+
+  (defn implicit-params [t]
     (function/match t
       (builtin _ _ _) []
-      (defined name _ _ _ _ _ free-vars-ref)
-        (ref/get-or-put free-vars-ref (compute-free-variables t))))
-
+      (defined name _ _ _ _ _ _ implicit-params-ref)
+        (ref/get-or-put implicit-params-ref
+          (seq [[variable [read? write?]] :pairs (free-var-accesses t)]
+            (param/new variable (param-sig/new (variable/type variable) (cond
+              (and read? write?) :inout
+              read? :in
+              write? :out
+              (error "BUG: free variable not actually used"))))))))
   )
 
 (defmodule expr
@@ -405,6 +448,7 @@
       (update op l-value r-value)
         [op (expr/to-glsl l-value) (expr/to-glsl r-value)]
       (break) ['break]
+      (discard) ['discard]
       (continue) ['continue]
       (return expr) ['return (expr/to-glsl expr)]
       (do body) ['do ;(map to-glsl body)]
@@ -611,6 +655,7 @@
            <8>
            "z"
            [<2> primitive [<3> float]]]]]]]]
+   @[[<10> unscanned]]
    @[]
    @[]])
 
@@ -733,6 +778,7 @@
            <8>
            "z"
            [<2> primitive [<3> float]]]]]]]]
+   @[[<12> unscanned]]
    @[]
    @[]])
 
@@ -758,13 +804,14 @@
 
     (function/match node
       (builtin _ _ _) nil
-      (defined name return-type _ params body _ _) (do
+      (defined name return-type _ params body _ _ _) (do
         (assertf (not (empty? body)) "%s: unimplemented function" name)
+        (def implicit-params (function/implicit-params node))
         # TODO: we should make sure we're actually generating a unique name
         (def glsl-name (symbol name))
         # TODO: hoist free variables
         # TODO: we need to come up with preferred glsl names for these variables
-        (def glsl ~(defn ,(type/to-glsl return-type) ,glsl-name [,;(mapcat render-param params)]
+        (def glsl ~(defn ,(type/to-glsl return-type) ,glsl-name [,;(mapcat render-param [;params ;implicit-params])]
           ,;(map statement/to-glsl body)))
         (array/push results glsl)))))
 
@@ -772,7 +819,7 @@
     (seq [function :keys forwards]
       (function/match function
         (builtin _ _ _) (error "BUG: cannot forward-declare a builtin function")
-        (defined name return-type _ params _ _ _)
+        (defined name return-type _ params _ _ _ _)
         ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render-param params)])))
     results))
 
@@ -849,7 +896,7 @@
 (deftest "function with out and inout parameters"
   (test (render-function (do
     (jlsl/defn :float foo [:float x [in :float] y [out :float] z [inout :float] w]
-      (return (foo x)))))
+      (return (foo x y z w)))))
     @[[defn
        :float
        foo
@@ -861,10 +908,10 @@
         z
         [inout :float]
         w]
-       [return [foo x]]]]))
+       [return [foo x y z w]]]]))
 
 (deftest "function with no free variables"
-  (test (function/free-variables
+  (test (function/implicit-params
     (jlsl/fn :float "name" [:float x]
       (return (+ x 1))))
     @[]))
@@ -872,44 +919,47 @@
 (deftest "function with simple free variable"
   (def free (variable/new "free" type/float))
 
-  (test (function/free-variables
+  (test (function/implicit-params
     (jlsl/fn :float "name" [:float x]
       (return (+ x free))))
-    @[[<1>
-       lexical
-       <2>
-       "free"
-       [<3> primitive [<4> float]]]]))
+    @[[[<1>
+        lexical
+        <2>
+        "free"
+        [<3> primitive [<4> float]]]
+       [[<3> primitive [<4> float]] :in]]]))
 
 (deftest "function that calls another function with a free variable"
   (def free (variable/new "free" type/float))
 
-  (test (function/free-variables (do
+  (test (function/implicit-params (do
     (jlsl/defn :float foo [:float x]
       (return (+ x free)))
 
     (jlsl/fn :float "name" [:float x]
       (return (foo x)))))
-    @[[<1>
-       lexical
-       <2>
-       "free"
-       [<3> primitive [<4> float]]]]))
+    @[[[<1>
+        lexical
+        <2>
+        "free"
+        [<3> primitive [<4> float]]]
+       [[<3> primitive [<4> float]] :in]]]))
 
 (deftest "recursive functions with free variables"
   (def free (variable/new "free" type/float))
-  (test (function/free-variables (do
+  (test (function/implicit-params (do
     (jlsl/defn :float foo [:float x]
       (return (foo (+ x free))))))
-    @[[<1>
-       lexical
-       <2>
-       "free"
-       [<3> primitive [<4> float]]]]))
+    @[[[<1>
+        lexical
+        <2>
+        "free"
+        [<3> primitive [<4> float]]]
+       [[<3> primitive [<4> float]] :in]]]))
 
 (deftest "mutually recursive functions with free variables"
   (def free (variable/new "free" type/float))
-  (test (function/free-variables (do
+  (test (function/implicit-params (do
     (jlsl/declare :float bar [:float])
 
     (jlsl/defn :float foo [:float x]
@@ -917,14 +967,15 @@
 
     (jlsl/implement :float bar [:float x]
       (return (foo x)))))
-    @[[<1>
-       lexical
-       <2>
-       "free"
-       [<3> primitive [<4> float]]]])
+    @[[[<1>
+        lexical
+        <2>
+        "free"
+        [<3> primitive [<4> float]]]
+       [[<3> primitive [<4> float]] :in]]])
 
   (def free2 (variable/new "free" type/float))
-  (test (function/free-variables (do
+  (test (function/implicit-params (do
     (jlsl/declare :float bar [:float])
 
     (jlsl/defn :float foo [:float x]
@@ -932,45 +983,57 @@
 
     (jlsl/implement :float bar [:float x]
       (return (foo (+ x free))))))
-    @[[<1>
-       lexical
-       <2>
-       "free"
-       [<3> primitive [<4> float]]]
-      [<1>
-       lexical
-       <5>
-       "free"
-       [<3> primitive [<4> float]]]])
+    @[[[<1>
+        lexical
+        <2>
+        "free"
+        [<3> primitive [<4> float]]]
+       [[<3> primitive [<4> float]] :in]]
+      [[<1>
+        lexical
+        <5>
+        "free"
+        [<3> primitive [<4> float]]]
+       [[<3> primitive [<4> float]] :in]]])
   )
 
 (deftest "variables should be reference-unique"
   (def free1 (variable/new "free" type/float))
   (def free2 (variable/new "free" type/float))
-  (test (function/free-variables (do
+  (test (function/implicit-params (do
     (jlsl/defn :float foo [:float x]
       (return (+ x (+ free1 free2))))))
-    @[[<1>
-       lexical
-       <2>
-       "free"
-       [<3> primitive [<4> float]]]
-      [<1>
-       lexical
-       <5>
-       "free"
-       [<3> primitive [<4> float]]]]))
+    @[[[<1>
+        lexical
+        <2>
+        "free"
+        [<3> primitive [<4> float]]]
+       [[<3> primitive [<4> float]] :in]]
+      [[<1>
+        lexical
+        <5>
+        "free"
+        [<3> primitive [<4> float]]]
+       [[<3> primitive [<4> float]] :in]]]))
 
-# TODO: we should support different implementations
+(deftest "function invocations only pick up free variables that are free at the function's callsite"
+  (test (function/implicit-params
+    (jlsl/defn :float foo [:float x]
+      (return ((jlsl/fn :float "bar" [:float y] (return (* x y))) x))))
+    @[]))
+
+# TODO: we should support overloads and multiple implementations.
+# also have to think about e.g. matrix multiplication
 (deftest "builtins are variadic"
   (def free1 (variable/new "free" type/float))
   (def free2 (variable/new "free" type/float))
-  (test-error (function/free-variables (do
+  (test-error (function/implicit-params (do
     (jlsl/defn :float foo [:float x]
       (return (+ x free1 free2)))))
     "zip length mismatch"))
 
-# TODO: alright, this is the one to beat
+# TODO: alright, this is the one to beat. we correctly generate the
+# implicit parameter but not yet the argument
 (deftest "first-class functions automatically forward free variables"
   (test (render-function
     (jlsl/defn :float foo [:float x]
@@ -978,7 +1041,7 @@
     @[[defn
        :float
        bar
-       [:float y]
+       [:float y :float x]
        [return [* x y]]]
       [defn
        :float
