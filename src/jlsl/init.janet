@@ -253,6 +253,12 @@
       (builtin _ _ param-sigs) param-sigs
       (defined _ _ param-sigs _ _ _ _ _) param-sigs))
 
+  (defn- /name [t]
+    (function/match t
+      (builtin name _ _) name
+      (defined name _ _ _ _ _ _ _) name))
+  (def name /name)
+
   (defn return-type [t]
     (function/match t
       (builtin _ type _) type
@@ -305,7 +311,15 @@
             (mark variable rw))
         (call function args) (do
           (put functions-called function (table/proto-flatten scope))
-          (each [arg param-sig] (zip args (param-sigs function))
+          (def args-and-params (try
+            (zip args (param-sigs function))
+            ([_ _]
+              (errorf "wrong number of arguments to function %s, expected %q, got %q"
+                (/name function)
+                (length (param-sigs function))
+                (length args)
+                ))))
+          (each [arg param-sig] args-and-params
             (match (param-sig/access param-sig)
               :in (see-expr arg :read)
               :out (see-expr arg :write)
@@ -1161,7 +1175,7 @@
   (test-error (function/implicit-params (do
     (jlsl/defn :float foo [:float x]
       (return (+ x free1 free2)))))
-    "zip length mismatch"))
+    "wrong number of arguments to function +, expected 2, got 3"))
 
 (deftest "variables always get unique identifiers"
   (def free1 (variable/new "free" type/float))
