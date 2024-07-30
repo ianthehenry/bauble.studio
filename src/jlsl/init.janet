@@ -227,6 +227,8 @@
 (defbuiltin + :float :float :float)
 (defbuiltin * :float :float :float)
 (defbuiltin - :float :float :float)
+(defbuiltin < :bool :float :float)
+(defbuiltin > :bool :float :float)
 (defbuiltin vec- :vec3 :vec3 :vec3)
 (defbuiltin length :float :vec3)
 
@@ -248,6 +250,8 @@
       '+ ['quote builtins/+]
       '* ['quote builtins/*]
       '- ['quote builtins/-]
+      '< ['quote builtins/<]
+      '> ['quote builtins/>]
       'length ['quote builtins/length]
       sym))
 
@@ -338,11 +342,15 @@
         ))
 
     (var visit nil)
-    (defn block [statements]
+    (defn in-block [f]
       (set scope (table/setproto @{} scope))
-      (each statement statements
-        (visit statement))
+      (f)
       (set scope (table/getproto scope)))
+
+    (defn block [statements]
+      (in-block (fn []
+        (each statement statements
+          (visit statement)))))
 
     (set visit (fn visit [statement]
       (statement/match statement
@@ -382,10 +390,13 @@
         (do-while cond body) (do
           (see-expr cond :read)
           (block body))
-        (for init cond update body) (do
+        (for init cond update body) (in-block (fn []
+          (visit init)
           (see-expr cond :read)
-          (block [init update ;body]))
-        (call function args) (see-expr (expr/call function args) nil))))
+          (visit update)
+          (each statement body
+            (visit statement))))
+        (call function args) (see-expr (expr/call function args) nil)
         (crement op expr) (see-expr (expr/crement op expr) nil))))
     (block body)
 
@@ -737,7 +748,12 @@
         0]]
       [<9>
        call
-       @<
+       [<1>
+        builtin
+        "<"
+        [<2> primitive [<3> bool]]
+        [[[<2> primitive [<3> float]] :in]
+         [[<2> primitive [<3> float]] :in]]]
        @[[<9>
           identifier
           [<4>
@@ -895,9 +911,9 @@
           [value body] [(render/expr value) (render/statement body)]))]
     (while cond body) (subscope ['while (render/expr cond) ;(map render/statement body)])
     (do-while cond body) ['do-while (render/expr cond) ;(subscope (map render/statement body))]
-    # TODO: `for` scopes are hella weird
     (for init cond update body)
-      (subscope ['for (render/expr init) (render/expr cond) (render/statement update) ;(map render/statement body)])
+      (subscope
+        ['for (render/statement init) (render/expr cond) (render/statement update) ;(map render/statement body)])
     (call function arguments)
       [(function/to-glsl function) ;(map render/expr arguments)]
     (crement op expr) [op (render/expr expr)])
@@ -1367,3 +1383,20 @@
        [do
         [var :vec3 p [vec3 0 0 0]]
         [return [translated p]]]]]))
+
+(deftest "for loop"
+  (def p (variable/new "p" type/vec3))
+  (test (render/function (do
+    (jlsl/defn :float distance []
+      (for (var i 10) (< i 10) (++ i)
+        (break))
+      )))
+    @[[defn
+       :float
+       distance
+       []
+       [for
+        [var :float i 10]
+        [< i 10]
+        [++ i]
+        [break]]]]))
