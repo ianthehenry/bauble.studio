@@ -218,7 +218,7 @@
 
 (defmacro defbuiltin [sym return-type & param-sigs]
   ~(def ,(symbol "builtins/" sym)
-    (,function/builtin ,(string sym) ,return-type
+    (,function/builtin ,(string sym) ,(type/of-ast return-type)
       ,(tuple/brackets ;(map param-sig/of-ast param-sigs)))))
 
 (defbuiltin + :float :float :float)
@@ -623,7 +623,7 @@
        [<1>
         builtin
         "+"
-        :float
+        [<2> primitive [<3> float]]
         [[[<2> primitive [<3> float]] :in]
          [[<2> primitive [<3> float]] :in]]]
        @[[<9>
@@ -748,7 +748,7 @@
        [<1>
         builtin
         "+"
-        :float
+        [<2> primitive [<3> float]]
         [[[<2> primitive [<3> float]] :in]
          [[<2> primitive [<3> float]] :in]]]
        @[[<9>
