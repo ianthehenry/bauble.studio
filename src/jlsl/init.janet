@@ -451,7 +451,7 @@
       (function/builtin
         (symbol constructor components)
         (type/vec base-type components)
-        [])
+        (seq [expr :in exprs] (param-sig/new (type expr) :in)))
       exprs))
 
   (defn of-ast [expr-ast]
