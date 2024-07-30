@@ -209,6 +209,7 @@
   (discard)
   (return expr)
   (do body)
+  (with bindings body)
   (if cond then else)
   (case value cases)
   (while cond body)
@@ -223,6 +224,9 @@
 
 (defbuiltin + :float :float :float)
 (defbuiltin * :float :float :float)
+(defbuiltin - :float :float :float)
+(defbuiltin vec- :vec3 :vec3 :vec3)
+(defbuiltin length :float :vec3)
 
 (defmodule function
   (defn new [name return-type param-sigs]
@@ -241,6 +245,8 @@
     (case sym
       '+ ['quote builtins/+]
       '* ['quote builtins/*]
+      '- ['quote builtins/-]
+      'length ['quote builtins/length]
       sym))
 
   (defn to-glsl [t]
@@ -351,6 +357,11 @@
         (discard) nil
         (return expr) (see-expr expr :read)
         (do body) (block body)
+        (with bindings body)
+          (block [
+            ;(seq [[variable expr] :in bindings]
+              (statement/declaration false variable expr))
+            ;body])
         (if cond then else) (do
           (see-expr cond :read)
           (visit then)
@@ -370,7 +381,7 @@
         (for init cond update body) (do
           (see-expr cond :read)
           (block [init update ;body]))
-        (call function args) (see-expr (expr/call function args)))))
+        (call function args) (see-expr (expr/call function args) nil))))
     (block body)
 
     [free-vars functions-called])
@@ -507,6 +518,10 @@
         'bxor= 'band= 'bor=)) dest expr]
         [statement/update op (expr/of-ast dest) (expr/of-ast expr)]
       ['do & body] [statement/do (of-asts body)]
+      ['with bindings & body] [statement/with
+        (tuple/brackets ;(seq [[variable expr] :in (partition 2 bindings)]
+          (tuple/brackets variable (expr/of-ast expr))))
+        (of-asts body)]
       ['if cond then & else] [statement/if (expr/of-ast cond) (of-ast then) (if else (of-ast else))]
       ['case value & cases]
         [statement/case
@@ -845,10 +860,12 @@
 (defn render/statement [t] # and *identifier-map*
   (statement/match t
     (declaration const? variable expr) (do
+      # render before we allocate the identifier
+      (def rendered-expr (render/expr expr))
       [(if const? 'def 'var)
         (type/to-glsl (variable/type variable))
         (new-identifier variable)
-        (render/expr expr)])
+        rendered-expr])
     (assign l-value r-value)
       ['set (render/expr l-value) (render/expr r-value)]
     (update op l-value r-value)
@@ -858,6 +875,10 @@
     (continue) ['continue]
     (return expr) ['return (render/expr expr)]
     (do body) (subscope ['do ;(map render/statement body)])
+    (with bindings body) (subscope ['do
+      ;(seq [[variable expr] :in bindings]
+        (render/statement (statement/declaration false variable expr)))
+      ;(map render/statement body)])
     (if cond then else)
       ['if (render/expr cond) (render/statement then) ;(if else [(render/statement else)] [])]
     (case value cases)
@@ -871,7 +892,8 @@
     (for init cond update body)
       (subscope ['for (render/expr init) (render/expr cond) (render/statement update) ;(map render/statement body)])
     (call function arguments)
-      [(function/to-glsl function) ;(map render/expr arguments)]))
+      [(function/to-glsl function) ;(map render/expr arguments)])
+  )
 
 (defn render/param [param] # and *identifier-map*
   [(param-sig/to-glsl (param/sig param)) (new-identifier (param/var param))])
@@ -1289,3 +1311,51 @@
        foo
        [:float x :float free]
        [return [+ [bar x free] [qux x free]]]]]))
+
+(deftest "with statements"
+  (def p (variable/new "p" type/vec3))
+  (test (render/function
+    (jlsl/defn :float distance []
+      (with [p [0 0 0]]
+        (return p))))
+    @[[defn
+       :float
+       distance
+       []
+       [do
+        [var :vec3 p [vec3 0 0 0]]
+        [return p]]]]))
+
+(deftest "dynamic variable"
+  (def p (variable/new "p" type/vec3))
+  (test (render/function (do
+    (jlsl/defn :float sphere [:float r]
+      (return (- (length p) r)))
+
+    (jlsl/defn :float translated []
+      (with [p (builtins/vec- p [10 20 30])]
+        (return (sphere 20))))
+
+    (jlsl/defn :float distance []
+      (with [p [0 0 0]]
+        (return (translated)))))
+    )
+    @[[defn
+       :float
+       sphere
+       [:float r :vec3 p]
+       [return [- [length p] r]]]
+      [defn
+       :float
+       translated
+       [:vec3 p]
+       [do
+        [var :vec3 p1 [vec- p [vec3 10 20 30]]]
+        [return [sphere 20 p1]]]]
+      [defn
+       :float
+       distance
+       []
+       [do
+        [var :vec3 p [vec3 0 0 0]]
+        [return [translated p]]]]]))
