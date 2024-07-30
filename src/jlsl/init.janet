@@ -198,6 +198,7 @@
   (literal type value)
   (identifier variable)
   (call function args)
+  (crement op value)
   (dot expr field))
 
 (defadt statement
@@ -215,7 +216,8 @@
   (while cond body)
   (do-while cond body)
   (for init cond update body)
-  (call function arguments))
+  (call function arguments)
+  (crement op expr))
 
 (defmacro defbuiltin [sym return-type & param-sigs]
   ~(def ,(symbol "builtins/" sym)
@@ -331,7 +333,9 @@
               :out (see-expr arg :write)
               :inout (do (see-expr arg :read) (see-expr arg :write))
               access (errorf "BUG: unknown access qualifier %q" access))))
-        (dot expr _) (see-expr expr rw)))
+        (dot expr _) (see-expr expr rw)
+        (crement _ expr) (do (see-expr expr :read) (see-expr expr :write))
+        ))
 
     (var visit nil)
     (defn block [statements]
@@ -382,6 +386,7 @@
           (see-expr cond :read)
           (block [init update ;body]))
         (call function args) (see-expr (expr/call function args) nil))))
+        (crement op expr) (see-expr (expr/crement op expr) nil))))
     (block body)
 
     [free-vars functions-called])
@@ -448,7 +453,8 @@
       (literal type _) type
       (identifier variable) (variable/type variable)
       (call function _) (function/return-type function)
-      (dot expr field) (type/field-type (type expr) field)))
+      (dot expr field) (type/field-type (type expr) field)
+      (crement _ expr) (type expr)))
 
   (defn vector [& exprs]
     (assert (not (empty? exprs)) "vector cannot be empty")
@@ -473,12 +479,11 @@
       |symbol? [expr/identifier expr-ast]
       |btuple? [vector ;(map of-ast expr-ast)]
       ['. expr key] [expr/dot (of-ast expr) ['quote key]]
-      [f & args] [expr/call (function/of-ast f) (map of-ast args)]
+      [(and op (or '++ '-- '_++ '_--)) expr] (expr/crement ['quote op] (of-ast expr))
       # TODO
-      # [(and op (or '++ '--)) expr]
-      # [(and op (or '_++ '_--)) expr]
       # ['if cond then else]
       # ['in expr key]
+      [f & args] [expr/call (function/of-ast f) (map of-ast args)]
       )))
 
 (defmodule statement
@@ -539,6 +544,7 @@
               (expr/of-ast check)
               (of-ast advance)
               (of-asts body)]))
+      [(and op (or '++ '-- '_++ '_--)) expr] [statement/crement ['quote op] (expr/of-ast expr)]
       [function & args] [statement/call (function/of-ast function) (map expr/of-ast args)]
     )))
 
@@ -744,15 +750,15 @@
           [<2> primitive [<3> float]]
           10]]]
       [<7>
-       call
-       @++
-       @[[<9>
-          identifier
-          [<4>
-           lexical
-           <10>
-           "i"
-           [<2> primitive [<3> float]]]]]]
+       crement
+       ++
+       [<9>
+        identifier
+        [<4>
+         lexical
+         <10>
+         "i"
+         [<2> primitive [<3> float]]]]]
       @[[<7>
          update
          @+=
@@ -841,7 +847,8 @@
       [(function/to-glsl function)
         ;(map render/expr args)
         ;(map |(render/expr (expr/identifier (param/var $))) (function/implicit-params function))]
-    (dot expr field) ['. (render/expr expr) field]))
+    (dot expr field) ['. (render/expr expr) field]
+    (crement op expr) [op (render/expr expr)]))
 
 (defmacro subscope [& exprs]
   ~(with-dyns [,*identifier-map* (,bimap/new (,dyn ,*identifier-map*))]
@@ -892,7 +899,8 @@
     (for init cond update body)
       (subscope ['for (render/expr init) (render/expr cond) (render/statement update) ;(map render/statement body)])
     (call function arguments)
-      [(function/to-glsl function) ;(map render/expr arguments)])
+      [(function/to-glsl function) ;(map render/expr arguments)]
+    (crement op expr) [op (render/expr expr)])
   )
 
 (defn render/param [param] # and *identifier-map*
