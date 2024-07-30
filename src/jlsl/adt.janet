@@ -68,6 +68,9 @@
           2 (let [[pattern body] branch] [(fix-pattern pattern) body])
           (error "impossible"))))
 
+    (unless (or allow-non-exhaustive-match? (= (div (length branches) 2) (length cases)))
+      (error "non-exhaustive match"))
+
     (with-syms [$value]
       ~(let [,$value ,value]
         (,assertf (and (tuple? ,$value) (= (first ,$value) ',unique-type-tag)) "%q is not a %s" ,$value ',name)

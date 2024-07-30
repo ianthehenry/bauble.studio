@@ -93,18 +93,21 @@
 
   (defn to-glsl [t]
     (type/match t
+      (void) :void
       (primitive t) (primitive-type/to-glsl t)
       (struct name _) (symbol name)
       (vec type count) (keyword (primitive-type/vec-prefix type) count)))
 
   (defn components [t]
     (type/match t
+      (void) (error "vector cannot contain void")
       (primitive _) 1
       (vec _ count) count
       (struct _ _) (error "vectors cannot contain compound entries")))
 
   (defn base-type [t]
     (type/match t
+      (void) nil
       (primitive t) t
       (vec t _) t
       (struct _ _) nil))
@@ -116,6 +119,7 @@
 
   (defn field-type [t field]
     (type/match t
+      (void) (error "cannot access field of void")
       (primitive t) (errorf "cannot access field %q of primitive type" field)
       (vec t count)
         (if (is-vector-field? field)
