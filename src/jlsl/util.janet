@@ -148,3 +148,6 @@
   (def len (length (in xs 0)))
   (assertf (all |(= len (length $)) xs) "zip length mismatch")
   (apply map tuple xs))
+
+(defn tmap [& args]
+  (tuple/slice (map ;args)))

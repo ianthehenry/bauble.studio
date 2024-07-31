@@ -16,6 +16,48 @@
   (uint)
   (bool))
 
+(defadt type
+  (void)
+  (primitive type)
+  (vec type count)
+  (mat cols rows) # this is specifically a float matrix; we don't support dmat yet
+  (array type length)
+  (struct name fields))
+
+(defadt free-vars
+  (unscanned)
+  (unresolved free-variables function-references)
+  (resolved free-variables))
+
+(defadt function
+  (builtin name return-type param-sigs)
+  (custom impl))
+
+(defadt expr
+  (literal type value)
+  (identifier variable)
+  (call function args)
+  (crement op value)
+  (dot expr field)
+  (in expr index))
+
+(defadt statement
+  (declaration const? variable expr)
+  (assign l-value r-value)
+  (update op l-value r-value)
+  (break)
+  (continue)
+  (discard)
+  (return expr)
+  (do body)
+  (with bindings body)
+  (if cond then else)
+  (case value cases)
+  (while cond body)
+  (do-while cond body)
+  (for init cond update body)
+  (expr expr))
+
 (defmodule primitive-type
   (def short-names
     {:float (primitive-type/float)
@@ -44,19 +86,6 @@
       (int) "ivec"
       (uint) "uvec"
       (bool) "bvec")))
-
-(defadt type
-  (void)
-  (primitive type)
-  (vec type count)
-  (mat cols rows) # this is specifically a float matrix; we don't support dmat yet
-  (array type length)
-  (struct name fields))
-
-(defadt free-vars
-  (unscanned)
-  (unresolved free-variables function-references)
-  (resolved free-variables))
 
 (defmodule type
   (def float (type/primitive (primitive-type/float)))
@@ -197,6 +226,7 @@
   (defn new [type access] [type access])
   (defn type [t] (in t 0))
   (defn access [t] (in t 1))
+  (defn in [type] (new type :in))
 
   (defn to-glsl [t]
     (def type (type/to-glsl (type t)))
@@ -225,124 +255,48 @@
   (defn type [t] (param-sig/type (sig t)))
   (defn access [t] (param-sig/access (sig t))))
 
-# TODO: I might want to separate a function and a function
-# implementation into different types.
-(defadt function
-  (builtin name return-type param-sigs)
-  (defined
-    name
-    return-type
-    param-sigs
-    params
-    body
-    scan-ref
-    free-var-access-ref
-    implicit-params-ref))
+(var function/param-sigs nil)
 
-(defadt expr
-  (literal type value)
-  (identifier variable)
-  (call function args)
-  (crement op value)
-  (dot expr field)
-  (in expr index))
-
-(defadt statement
-  (declaration const? variable expr)
-  (assign l-value r-value)
-  (update op l-value r-value)
-  (break)
-  (continue)
-  (discard)
-  (return expr)
-  (do body)
-  (with bindings body)
-  (if cond then else)
-  (case value cases)
-  (while cond body)
-  (do-while cond body)
-  (for init cond update body)
-  (call function arguments)
-  (crement op expr))
-
-(defmacro defbuiltin [sym return-type & param-sigs]
-  ~(def ,(symbol "builtins/" sym)
-    (,function/builtin ,(string sym) ,(type/of-ast return-type)
-      ,(tuple/brackets ;(map param-sig/of-ast param-sigs)))))
-
-(defbuiltin + :float :float :float)
-(defbuiltin * :float :float :float)
-(defbuiltin - :float :float :float)
-(defbuiltin < :bool :float :float)
-(defbuiltin > :bool :float :float)
-(defbuiltin vec- :vec3 :vec3 :vec3)
-(defbuiltin length :float :vec3)
-
-(defmodule function
+# an impl is an implementation of a custom function
+(defmodule impl
   (defn new [name return-type param-sigs]
-    (function/defined
-      name
-      return-type
-      param-sigs
-      @[] # params
-      @[] # body
-      (ref/new (free-vars/unscanned)) # scan-ref
-      (ref/new) # free-var-access-ref
-      (ref/new) # implicit-params-ref
-      ))
+    {:name name
+     :declared-return-type return-type
+     :declared-param-sigs param-sigs
+     :params (ref/new)
+     :body (ref/new)
+     :scan-ref (ref/new (free-vars/unscanned))
+     :free-var-access-ref (ref/new)
+     :implicit-params-ref (ref/new)})
 
-  (defn of-ast [sym]
-    (case sym
-      '+ ['quote builtins/+]
-      '* ['quote builtins/*]
-      '- ['quote builtins/-]
-      '< ['quote builtins/<]
-      '> ['quote builtins/>]
-      'length ['quote builtins/length]
-      sym))
+  (defn return-type [{:declared-return-type declared-return-type}] declared-return-type)
 
-  (defn to-glsl [t]
-    (function/match t
-      (builtin name _ _) (symbol name)
-      (defined name _ _ _ _ _ _ _) (symbol name)))
-
-  (defn param-sigs [t]
-    (function/match t
-      (builtin _ _ param-sigs) param-sigs
-      (defined _ _ param-sigs _ _ _ _ _) param-sigs))
-
-  (defn- /name [t]
-    (function/match t
-      (builtin name _ _) name
-      (defined name _ _ _ _ _ _ _) name))
+  (defn- /name [x] (in x :name))
   (def name /name)
+  (defn param-sigs [{:declared-param-sigs param-sigs}] param-sigs)
 
-  (defn return-type [t]
-    (function/match t
-      (builtin _ type _) type
-      (defined _ type _ _ _ _ _ _) type))
-
-  # TODO: theoretically a single function can have multiple overloads,
-  # so we should be able to implement it multiple times. but we're not there yet.
   (defn implement [t return-type params body]
-    (function/match t
-      (builtin _ _ _) (error "BUG: attempting to implement builtin function")
-      (defined name declared-return-type declared-param-sigs current-params current-body _ _ _) (do
-        (assertf (empty? current-body) "%s: cannot implement a function multiple times" name)
-        (assertf (not (empty? body)) "%s: cannot implement with empty body" name)
-        (def implemented-param-sigs (map param/sig params))
-        (assertf (contents= declared-param-sigs implemented-param-sigs)
-          "%s: parameter mismatch, declared as %q implemented as %q"
-          name
-          declared-param-sigs
-          implemented-param-sigs)
-        (assertf (= declared-return-type return-type)
-          "%s: return type mismatch, declared as %q implemented as %q"
-          name
-          declared-return-type
-          return-type)
-        (array/concat current-body body)
-        (array/concat current-params params)))
+    (def {:name name
+          :declared-return-type declared-return-type
+          :declared-param-sigs declared-param-sigs
+          :params current-params
+          :body current-body} t)
+
+    (assertf (empty? current-body) "%s: cannot implement a function multiple times" name)
+    (assertf (not (empty? body)) "%s: cannot implement with empty body" name)
+    (def implemented-param-sigs (map param/sig params))
+    (assertf (contents= declared-param-sigs implemented-param-sigs)
+      "%s: parameter mismatch, declared as %q implemented as %q"
+      name
+      declared-param-sigs
+      implemented-param-sigs)
+    (assertf (= declared-return-type return-type)
+      "%s: return type mismatch, declared as %q implemented as %q"
+      name
+      declared-return-type
+      return-type)
+    (array/concat current-body body)
+    (array/concat current-params params)
     t)
 
   (defn root-identifier [expr]
@@ -355,7 +309,7 @@
       (crement _ expr) nil))
 
   # returns free variables and all referenced functions
-  (defn scan [name body params]
+  (defn- scan [name body params]
     (assertf (not (empty? body)) "%s: cannot find free variables of a function that has not been implemented yet" name)
 
     (var scope (tabseq [param :in params] (param/var param) true))
@@ -379,11 +333,11 @@
         (call function args) (do
           (put functions-called function (table/proto-flatten scope))
           (def args-and-params (try
-            (zip args (param-sigs function))
+            (zip args (function/param-sigs function))
             ([_ _]
               (errorf "wrong number of arguments to function %s, expected %q, got %q"
                 (/name function)
-                (length (param-sigs function))
+                (length (function/param-sigs function))
                 (length args)
                 ))))
           (each [arg param-sig] args-and-params
@@ -463,66 +417,174 @@
           (visit update)
           (each statement body
             (visit statement))))
-        (call function args) (see-expr (expr/call function args) nil)
-        (crement op expr) (see-expr (expr/crement op expr) nil))))
+        (expr expr) (see-expr expr nil))))
     (block body)
 
     [free-vars functions-called])
 
-  (defn memoized-scan [t]
+  (defn- memoized-scan [{:name name :params params :body body :scan-ref scan-ref}]
+    (free-vars/match (ref/get scan-ref)
+      (unscanned) (do
+        (def [free-vars functions] (scan name body params))
+        (ref/set scan-ref (free-vars/unresolved free-vars functions))
+        [free-vars functions])
+      (unresolved free-vars functions) [free-vars functions]
+      (resolved free-vars) [free-vars {}]))
+
+  (var- free-var-accesses nil)
+
+  (defn- union-variable [into variable [read? written?]]
+    (if (has-key? into variable)
+      (let [[old-read? old-written?] (in into variable)]
+        (put into variable [(or read? old-read?) (or written? old-written?)]))
+      (put into variable [read? written?])))
+
+  (defn- compute-free-var-accesses [t]
+    (def result @{})
+    (def [free-vars functions] (memoized-scan t))
+    (eachp [variable access-types] free-vars
+      (union-variable result variable access-types))
+    (eachp [function bound-vars] functions
+      (function/match function
+        (builtin _ _ _) nil
+        (custom impl) (do
+          (def free-var-set (free-var-accesses impl))
+          (loop [[free-var access-types] :pairs free-var-set
+                 :unless (in bound-vars free-var)]
+            (union-variable result free-var access-types)))))
+    result)
+
+  (set free-var-accesses (fn impl/free-var-accesses [t]
+    (def {:free-var-access-ref free-var-access-ref} t)
+    (when (= (ref/get free-var-access-ref) :computing)
+      (break @{}))
+    (ref/set free-var-access-ref :computing)
+    (def result (compute-free-var-accesses t))
+    (ref/set free-var-access-ref result)
+    result))
+
+  (defn implicit-params [t]
+    (def {:implicit-params-ref implicit-params-ref} t)
+    (ref/get-or-put implicit-params-ref
+      (sort (seq [[variable [read? write?]] :pairs (free-var-accesses t)]
+        (param/new variable (param-sig/new (variable/type variable) (cond
+          (and read? write?) :inout
+          read? :in
+          write? :out
+          (error "BUG: free variable not actually used"))))))))
+  )
+
+(def- multifunction-proto @{:type 'function})
+(defn multifunction? [t] (and (table? t) (= (table/getproto t) multifunction-proto)))
+(defmodule multifunction
+  (defn new [name overloads]
+    (table/setproto @{:name name :overloads overloads} multifunction-proto))
+
+  (defn single [name return-type param-sigs]
+    (new name
+      {(tmap param-sig/type param-sigs)
+        (function/custom
+          (impl/new name return-type param-sigs))}))
+
+  # multifunction -> function
+  (defn resolve [{:name name :overloads overloads} arg-types]
+    (or (overloads arg-types)
+      (errorf "%s: no overload for arguments %q" name (tuple/brackets ;(map type/to-glsl arg-types))))))
+
+(def builtins @{})
+
+(defmacro defbuiltin [sym return-type & param-sigs]
+  (with-syms [$param-sigs]
+    ~(upscope
+      (def ,$param-sigs (,tuple ,;(map param-sig/of-ast param-sigs)))
+      (,put ',builtins ',sym
+        (,multifunction/new ,(string sym)
+          (,struct (,tmap ,param-sig/type ,$param-sigs)
+            (,function/builtin ,(string sym)
+              ,(type/of-ast return-type)
+              ,$param-sigs)))))))
+
+(defn resolve-very-generic [f name arity arg-types]
+  (if (< arity 0)
+    (let [min-arity (math/abs arity)]
+      (when (< (length arg-types) min-arity)
+        (errorf "%s needs at least %d arguments but you gave it %d" name min-arity (length arg-types))))
+    (unless (= arity (length arg-types))
+      (errorf "%s needs %d arguments but you gave it %d" name arity (length arg-types))))
+  (def base-type (get-unique type/base-type arg-types))
+  (def components (get-unique type/components arg-types))
+  (function/builtin
+    name
+    (f base-type components)
+    (map param-sig/in arg-types)))
+
+(def resolve-generic (partial resolve-very-generic
+  (fn [base-type components]
+    (if (= components 1)
+      (type/primitive base-type)
+      (type/vec base-type components)))))
+
+(defmacro defbinop [sym arity]
+  ~(,put ',builtins ',sym
+    (,multifunction/new ,(string sym)
+      (,partial ,resolve-generic ,(string sym) ,arity))))
+
+(defbinop + -2)
+(defbinop - -1)
+(defbinop * -2)
+(defbinop / -1)
+(test (in builtins '+) @{:name "+" :overloads "<function 0x1>"})
+
+(defbuiltin < :bool :int :int)
+(defbuiltin > :bool :int :int)
+(defbuiltin length :float :vec3)
+
+(defmodule function
+  (defn return-type [t]
     (function/match t
-      (builtin _ _ _) [[] {}]
-      (defined name _ _ params body scan-ref _ _)
-        (free-vars/match (ref/get scan-ref)
-          (unscanned) (do
-            (def [free-vars functions] (scan name body params))
-            (ref/set scan-ref (free-vars/unresolved free-vars functions))
-            [free-vars functions])
-          (unresolved free-vars functions) [free-vars functions]
-          (resolved free-vars) [free-vars {}])))
+      (builtin _ return-type _) return-type
+      (custom impl) (impl/return-type impl)))
 
-    (var free-var-accesses nil)
-
-    (defn union-variable [into variable [read? written?]]
-      (if (has-key? into variable)
-        (let [[old-read? old-written?] (in into variable)]
-          (put into variable [(or read? old-read?) (or written? old-written?)]))
-        (put into variable [read? written?])))
-
-    (defn compute-free-var-accesses [t]
-      (def result @{})
-      (def [free-vars functions] (memoized-scan t))
-      (eachp [variable access-types] free-vars
-        (union-variable result variable access-types))
-      (eachp [function bound-vars] functions
-        (def free-var-set (free-var-accesses function))
-        (loop [[free-var access-types] :pairs free-var-set
-               :unless (in bound-vars free-var)]
-          (union-variable result free-var access-types)))
-      result)
-
-  (set free-var-accesses (fn free-var-accesses [t]
+  (defn name [t]
     (function/match t
-      (builtin _ _ _) @{}
-      (defined name _ _ _ _ _ free-var-access-ref _) (do
-        (if (= (ref/get free-var-access-ref) :computing) @{}
-          (do
-            (ref/set free-var-access-ref :computing)
-            (def result (compute-free-var-accesses t))
-            (ref/set free-var-access-ref result)
-            result))))))
+      (builtin name _ _) name
+      (custom impl) (impl/name impl)))
 
   (defn implicit-params [t]
     (function/match t
       (builtin _ _ _) []
-      (defined name _ _ _ _ _ _ implicit-params-ref)
-        (ref/get-or-put implicit-params-ref
-          (sort (seq [[variable [read? write?]] :pairs (free-var-accesses t)]
-            (param/new variable (param-sig/new (variable/type variable) (cond
-              (and read? write?) :inout
-              read? :in
-              write? :out
-              (error "BUG: free variable not actually used")))))))))
+      (custom impl) (impl/implicit-params impl))))
+
+(set function/param-sigs (fn function/param-sigs [t]
+  (function/match t
+    (builtin _ _ param-sigs) param-sigs
+    (custom impl) (impl/param-sigs impl))))
+
+(defn resolve-function [function-or-multifunction arg-types]
+  (assertf (tuple? arg-types) "arg-types must be a tuple, got %q" arg-types)
+  (if (multifunction? function-or-multifunction)
+    (multifunction/resolve function-or-multifunction arg-types)
+    (do
+      (assertf (function? function-or-multifunction)
+        "%q is not a function" function-or-multifunction)
+      function-or-multifunction)))
+
+(defn resolve-impl [t arg-types]
+  (function/match (resolve-function t arg-types)
+    (custom impl) impl
+    (builtin name _ _) (errorf "cannot implement builtin %s" name)))
+
+(defmodule multifunction
+  (defn of-ast [sym]
+    (or (if-let [f (in builtins sym)] ~',f sym)))
+
+  (defn param-sigs [t arg-types]
+    (impl/param-sigs (multifunction/resolve t arg-types)))
+
+  (defn name [{:name name}] name)
+
+  # TODO: this is wrong of course
+  (defn to-glsl [t] (symbol (name t)))
   )
 
 (defmodule expr
@@ -547,8 +609,11 @@
       (function/builtin
         (symbol constructor components)
         (type/vec base-type components)
-        (seq [expr :in exprs] (param-sig/new (type expr) :in)))
+        (map (>> type param-sig/in) exprs))
       exprs))
+
+  (defn call [general-function args]
+    (expr/call (resolve-function general-function (tmap type args)) args))
 
   (defn of-ast [expr-ast]
     (pat/match expr-ast
@@ -559,10 +624,10 @@
       |btuple? [vector ;(map of-ast expr-ast)]
       ['. expr field] [expr/dot (of-ast expr) ['quote field]]
       ['in expr index] [expr/in (of-ast expr) (of-ast index)]
-      [(and op (or '++ '-- '_++ '_--)) expr] (expr/crement ['quote op] (of-ast expr))
+      [(and op (or '++ '-- '_++ '_--)) expr] [expr/crement ['quote op] (of-ast expr)]
       # TODO
       # ['if cond then else]
-      [f & args] [expr/call (function/of-ast f) (map of-ast args)]
+      [f & args] [call (multifunction/of-ast f) (map of-ast args)]
       )))
 
 (defmodule statement
@@ -579,7 +644,7 @@
 
   # takes the AST of a statement and returns code that
   # creates a first-class statement
-  (varfn of-ast [ast]
+  (set of-ast (fn of-ast [ast]
     (assertf (ptuple? ast) "%q is not a statement" ast)
 
     (pat/match ast
@@ -623,16 +688,18 @@
               (expr/of-ast check)
               (of-ast advance)
               (of-asts body)]))
-      [(and op (or '++ '-- '_++ '_--)) expr] [statement/crement ['quote op] (expr/of-ast expr)]
-      [function & args] [statement/call (function/of-ast function) (map expr/of-ast args)]
+      other [statement/expr (expr/of-ast other)]
     )))
+  )
 
 (defmacro- jlsl/stub [return-type name param-sigs]
-  ~(,function/new ,name ,(type/of-ast return-type) [,;(map param-sig/of-ast param-sigs)]))
+  ~(,multifunction/single ,name ,(type/of-ast return-type) [,;(map param-sig/of-ast param-sigs)]))
 
+# declare returns a multifunction
 (defmacro- jlsl/declare [return-type name param-sigs]
   ['def name (call jlsl/stub return-type (string name) param-sigs)])
 
+# implement takes a multifunction and returns a single function
 (defmacro- jlsl/implement [return-type name params & body]
   (def $return-type (gensym))
   (def $params (gensym))
@@ -654,18 +721,20 @@
     (def ,$params [,;<params>])
     (def ,$body @[])
     ,;<body>
-    (,function/implement ,name ,$return-type ,$params ,$body)))
+    (,function/custom (,impl/implement (,resolve-impl ,name (,tmap ,param/type ,$params)) ,$return-type ,$params ,$body))))
 
+# fn returns a single function
 (defmacro- jlsl/fn [return-type name params & body]
   (call jlsl/implement return-type (call jlsl/stub return-type name (map 0 (partition 2 params))) params ;body))
 
+# defn returns a single function
 (defmacro- jlsl/defn [return-type name params & body]
   ['upscope
     (call jlsl/declare return-type name (map 0 (partition 2 params)))
     (call jlsl/implement return-type name params ;body)])
 
 (test-macro (jlsl/declare :float incr [:float])
-  (def incr (@new "incr" (@type/primitive (quote (<1> float))) [(@new (@type/primitive (quote (<1> float))) :in)])))
+  (def incr (@single "incr" (@type/primitive (quote (<1> float))) [(@new (@type/primitive (quote (<1> float))) :in)])))
 
 (test-macro (jlsl/implement :float incr [:float x] (return x))
   (do
@@ -673,227 +742,169 @@
     (def <3> [(upscope (def <4> (@new (@type/primitive (quote (<2> float))) :in)) (def x (@new "x" (@type <4>))) (@new x <4>))])
     (def <5> @[])
     (@array/push <5> (@statement/return (@expr/identifier x)))
-    (@implement incr <1> <3> <5>)))
+    (@function/custom (@implement (@resolve-impl incr (@tmap @type <3>)) <1> <3> <5>))))
 (test-macro (jlsl/defn :float incr [:float x] (return x))
   (upscope
-    (def incr (@new "incr" (@type/primitive (quote (<1> float))) [(@new (@type/primitive (quote (<1> float))) :in)]))
+    (def incr (@single "incr" (@type/primitive (quote (<1> float))) [(@new (@type/primitive (quote (<1> float))) :in)]))
     (do
       (def <2> (@type/primitive (quote (<1> float))))
       (def <3> [(upscope (def <4> (@new (@type/primitive (quote (<1> float))) :in)) (def x (@new "x" (@type <4>))) (@new x <4>))])
       (def <5> @[])
       (@array/push <5> (@statement/return (@expr/identifier x)))
-      (@implement incr <2> <3> <5>))))
+      (@function/custom (@implement (@resolve-impl incr (@tmap @type <3>)) <2> <3> <5>)))))
 
 (test-macro (jlsl/defn :void foo [:float x :float y]
   (var x 1)
   (return [x 2 3]))
   (upscope
-    (def foo (@new "foo" (quote (<1> void)) [(@new (@type/primitive (quote (<2> float))) :in) (@new (@type/primitive (quote (<2> float))) :in)]))
+    (def foo (@single "foo" (quote (<1> void)) [(@new (@type/primitive (quote (<2> float))) :in) (@new (@type/primitive (quote (<2> float))) :in)]))
     (do
       (def <3> (quote (<1> void)))
       (def <4> [(upscope (def <5> (@new (@type/primitive (quote (<2> float))) :in)) (def x (@new "x" (@type <5>))) (@new x <5>)) (upscope (def <6> (@new (@type/primitive (quote (<2> float))) :in)) (def y (@new "y" (@type <6>))) (@new y <6>))])
       (def <7> @[])
       (@array/push <7> (upscope (def <8> (@expr/literal (quote (<1> primitive (<2> float))) 1)) (def <9> (@type <8>)) (def x (@new "x" <9>)) (@statement/declaration false x <8>)))
       (@array/push <7> (@statement/return (@vector (@expr/identifier x) (@expr/literal (quote (<1> primitive (<2> float))) 2) (@expr/literal (quote (<1> primitive (<2> float))) 3))))
-      (@implement foo <3> <4> <7>))))
+      (@function/custom (@implement (@resolve-impl foo (@tmap @type <4>)) <3> <4> <7>)))))
 
 (test (jlsl/defn :void foo [:float x :float y]
   (var z 1)
   (return (+ x y z)))
   [<1>
-   defined
-   "foo"
-   [<2> void]
-   [[[<2> primitive [<3> float]] :in]
-    [[<2> primitive [<3> float]] :in]]
-   @[[[<4>
-       lexical
-       <5>
-       "x"
-       [<2> primitive [<3> float]]]
-      [[<2> primitive [<3> float]] :in]]
-     [[<4>
-       lexical
-       <6>
-       "y"
-       [<2> primitive [<3> float]]]
-      [[<2> primitive [<3> float]] :in]]]
-   @[[<7>
-      declaration
-      false
-      [<4>
-       lexical
-       <8>
-       "z"
-       [<2> primitive [<3> float]]]
-      [<9>
-       literal
-       [<2> primitive [<3> float]]
-       1]]
-     [<7>
-      return
-      [<9>
-       call
-       [<1>
-        builtin
-        "+"
-        [<2> primitive [<3> float]]
-        [[[<2> primitive [<3> float]] :in]
-         [[<2> primitive [<3> float]] :in]]]
-       @[[<9>
-          identifier
-          [<4>
-           lexical
-           <5>
-           "x"
-           [<2> primitive [<3> float]]]]
-         [<9>
-          identifier
-          [<4>
-           lexical
-           <6>
-           "y"
-           [<2> primitive [<3> float]]]]
-         [<9>
-          identifier
-          [<4>
-           lexical
-           <8>
-           "z"
-           [<2> primitive [<3> float]]]]]]]]
-   @[[<10> unscanned]]
-   @[]
-   @[]])
+   custom
+   {:body @[[<7>
+             declaration
+             false
+             [<2>
+              lexical
+              <8>
+              "z"
+              [<4> primitive [<5> float]]]
+             [<9>
+              literal
+              [<4> primitive [<5> float]]
+              1]]
+            [<7>
+             return
+             [<9>
+              call
+              [<1>
+               builtin
+               "+"
+               [<4> primitive [<5> float]]
+               @[[[<4> primitive [<5> float]] :in]
+                 [[<4> primitive [<5> float]] :in]
+                 [[<4> primitive [<5> float]] :in]]]
+              @[[<9>
+                 identifier
+                 [<2>
+                  lexical
+                  <3>
+                  "x"
+                  [<4> primitive [<5> float]]]]
+                [<9>
+                 identifier
+                 [<2>
+                  lexical
+                  <6>
+                  "y"
+                  [<4> primitive [<5> float]]]]
+                [<9>
+                 identifier
+                 [<2>
+                  lexical
+                  <8>
+                  "z"
+                  [<4> primitive [<5> float]]]]]]]]
+    :declared-param-sigs [[[<4> primitive [<5> float]] :in]
+                          [[<4> primitive [<5> float]] :in]]
+    :declared-return-type [<4> void]
+    :free-var-access-ref @[]
+    :implicit-params-ref @[]
+    :name "foo"
+    :params @[[[<2>
+                lexical
+                <3>
+                "x"
+                [<4> primitive [<5> float]]]
+               [[<4> primitive [<5> float]] :in]]
+              [[<2>
+                lexical
+                <6>
+                "y"
+                [<4> primitive [<5> float]]]
+               [[<4> primitive [<5> float]] :in]]]
+    :scan-ref @[[<10> unscanned]]}])
 
 (test (jlsl/defn :void foo [:float x :float y]
   (var z 0)
-  (for (var i 0) (< i 10) (++ i)
-    (+= z i))
+  #(for (var i 0) (< i 10) (++ i)
+  #  (+= z i))
   (return (+ x y z)))
   [<1>
-   defined
-   "foo"
-   [<2> void]
-   [[[<2> primitive [<3> float]] :in]
-    [[<2> primitive [<3> float]] :in]]
-   @[[[<4>
-       lexical
-       <5>
-       "x"
-       [<2> primitive [<3> float]]]
-      [[<2> primitive [<3> float]] :in]]
-     [[<4>
-       lexical
-       <6>
-       "y"
-       [<2> primitive [<3> float]]]
-      [[<2> primitive [<3> float]] :in]]]
-   @[[<7>
-      declaration
-      false
-      [<4>
-       lexical
-       <8>
-       "z"
-       [<2> primitive [<3> float]]]
-      [<9>
-       literal
-       [<2> primitive [<3> float]]
-       0]]
-     [<7>
-      for
-      [<7>
-       declaration
-       false
-       [<4>
-        lexical
-        <10>
-        "i"
-        [<2> primitive [<3> float]]]
-       [<9>
-        literal
-        [<2> primitive [<3> float]]
-        0]]
-      [<9>
-       call
-       [<1>
-        builtin
-        "<"
-        [<2> primitive [<3> bool]]
-        [[[<2> primitive [<3> float]] :in]
-         [[<2> primitive [<3> float]] :in]]]
-       @[[<9>
-          identifier
-          [<4>
-           lexical
-           <10>
-           "i"
-           [<2> primitive [<3> float]]]]
-         [<9>
-          literal
-          [<2> primitive [<3> float]]
-          10]]]
-      [<7>
-       crement
-       ++
-       [<9>
-        identifier
-        [<4>
-         lexical
-         <10>
-         "i"
-         [<2> primitive [<3> float]]]]]
-      @[[<7>
-         update
-         +=
-         [<9>
-          identifier
-          [<4>
-           lexical
-           <8>
-           "z"
-           [<2> primitive [<3> float]]]]
-         [<9>
-          identifier
-          [<4>
-           lexical
-           <10>
-           "i"
-           [<2> primitive [<3> float]]]]]]]
-     [<7>
-      return
-      [<9>
-       call
-       [<1>
-        builtin
-        "+"
-        [<2> primitive [<3> float]]
-        [[[<2> primitive [<3> float]] :in]
-         [[<2> primitive [<3> float]] :in]]]
-       @[[<9>
-          identifier
-          [<4>
-           lexical
-           <5>
-           "x"
-           [<2> primitive [<3> float]]]]
-         [<9>
-          identifier
-          [<4>
-           lexical
-           <6>
-           "y"
-           [<2> primitive [<3> float]]]]
-         [<9>
-          identifier
-          [<4>
-           lexical
-           <8>
-           "z"
-           [<2> primitive [<3> float]]]]]]]]
-   @[[<11> unscanned]]
-   @[]
-   @[]])
+   custom
+   {:body @[[<7>
+             declaration
+             false
+             [<2>
+              lexical
+              <8>
+              "z"
+              [<4> primitive [<5> float]]]
+             [<9>
+              literal
+              [<4> primitive [<5> float]]
+              0]]
+            [<7>
+             return
+             [<9>
+              call
+              [<1>
+               builtin
+               "+"
+               [<4> primitive [<5> float]]
+               @[[[<4> primitive [<5> float]] :in]
+                 [[<4> primitive [<5> float]] :in]
+                 [[<4> primitive [<5> float]] :in]]]
+              @[[<9>
+                 identifier
+                 [<2>
+                  lexical
+                  <3>
+                  "x"
+                  [<4> primitive [<5> float]]]]
+                [<9>
+                 identifier
+                 [<2>
+                  lexical
+                  <6>
+                  "y"
+                  [<4> primitive [<5> float]]]]
+                [<9>
+                 identifier
+                 [<2>
+                  lexical
+                  <8>
+                  "z"
+                  [<4> primitive [<5> float]]]]]]]]
+    :declared-param-sigs [[[<4> primitive [<5> float]] :in]
+                          [[<4> primitive [<5> float]] :in]]
+    :declared-return-type [<4> void]
+    :free-var-access-ref @[]
+    :implicit-params-ref @[]
+    :name "foo"
+    :params @[[[<2>
+                lexical
+                <3>
+                "x"
+                [<4> primitive [<5> float]]]
+               [[<4> primitive [<5> float]] :in]]
+              [[<2>
+                lexical
+                <6>
+                "y"
+                [<4> primitive [<5> float]]]
+               [[<4> primitive [<5> float]] :in]]]
+    :scan-ref @[[<10> unscanned]]}])
 
 # ----------
 
@@ -928,7 +939,8 @@
         (errorf "BUG: variable %q is not in scope. This shouldn't happen, but it happened. How did it happen?"
           variable))
     (call function args)
-      [(function/to-glsl function)
+      # TODO: need to allocate GLSL names
+      [(symbol (function/name function))
         ;(map render/expr args)
         ;(map |(render/expr (expr/identifier (param/var $))) (function/implicit-params function))]
     (dot expr field) ['. (render/expr expr) field]
@@ -983,9 +995,7 @@
     (for init cond update body)
       (subscope
         ['for (render/statement init) (render/expr cond) (render/statement update) ;(map render/statement body)])
-    (call function arguments)
-      [(function/to-glsl function) ;(map render/expr arguments)]
-    (crement op expr) [op (render/expr expr)])
+    (expr expr) (render/expr expr))
   )
 
 (defn render/param [param] # and *identifier-map*
@@ -1008,7 +1018,7 @@
 
     (function/match node
       (builtin _ _ _) nil
-      (defined name return-type _ params body _ _ _)
+      (custom {:name name :declared-return-type return-type :params params :body body})
         (with-dyns [*identifier-map* (bimap/new)]
           (assertf (not (empty? body)) "%s: unimplemented function" name)
           (def implicit-params (function/implicit-params node))
@@ -1024,11 +1034,10 @@
     (seq [function :keys forwards]
       (function/match function
         (builtin _ _ _) (error "BUG: cannot forward-declare a builtin function")
-        (defined name return-type _ params _ _ _ _)
+        (custom {:name name :declared-return-type return-type :params params})
           (with-dyns [*identifier-map* (bimap/new)]
             ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render/param params)]))))
     results))
-
 
 (defmacro* test-function [expr & results]
   ~(test-stdout (,prin (,glsl/render-program (,render/function ,expr))) ,;results))
@@ -1219,12 +1228,13 @@
 # TODO: we should support overloads and multiple implementations.
 # also have to think about e.g. matrix multiplication
 (deftest "builtins are variadic"
-  (def free1 (variable/new "free" type/float))
-  (def free2 (variable/new "free" type/float))
-  (test-error (show-implicit-params (do
+  (def free1 (variable/new "free1" type/float))
+  (def free2 (variable/new "free2" type/float))
+  (test (show-implicit-params (do
     (jlsl/defn :float foo [:float x]
       (return (+ x free1 free2)))))
-    "wrong number of arguments to function +, expected 2, got 3"))
+    @[[:float "free1" :in]
+      [:float "free2" :in]]))
 
 (deftest "variables always get unique identifiers"
   (def free1 (variable/new "free" type/float))
@@ -1343,9 +1353,8 @@
     (jlsl/defn :float sphere [:float r]
       (return (- (length p) r)))
 
-    # TODO: rename vec- to -
     (jlsl/defn :float translated []
-      (with [p (builtins/vec- p [10 20 30])]
+      (with [p (- p [10 20 30])]
         (return (sphere 20))))
 
     (jlsl/defn :float distance []
@@ -1357,7 +1366,7 @@
     
     float translated(vec3 p) {
       {
-        vec3 p1 = vec_(p, vec3(10.0, 20.0, 30.0));
+        vec3 p1 = p - vec3(10.0, 20.0, 30.0);
         return sphere(20.0, p1);
       }
     }
@@ -1370,13 +1379,27 @@
     }
   `))
 
+
+(deftest "increment/decrement statements"
+  (test-function
+    (jlsl/fn :float "foo" [:float x]
+      (++ x)
+      (_-- x)
+      (return x)) `
+    float foo(float x) {
+      ++x;
+      x--;
+      return x;
+    }
+  `))
+
 (deftest "for loop"
   (test-function
     (jlsl/fn :float "distance" []
-      (for (var i 10) (< i 10) (++ i)
+      (for (var i :10) (< i :10) (_++ i)
         (break))) `
     float distance() {
-      for (float i = 10.0; i < 10.0; ++i) {
+      for (int i = 10; i < 10; i++) {
         break;
       }
     }
