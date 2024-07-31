@@ -533,7 +533,7 @@
         '+= '*= '/= '-= '%=
         'blshift= 'brshift=
         'bxor= 'band= 'bor=)) dest expr]
-        [statement/update op (expr/of-ast dest) (expr/of-ast expr)]
+        [statement/update ~',op (expr/of-ast dest) (expr/of-ast expr)]
       ['do & body] [statement/do (of-asts body)]
       ['with bindings & body] [statement/with
         (tuple/brackets ;(seq [[variable expr] :in (partition 2 bindings)]
@@ -778,7 +778,7 @@
          [<2> primitive [<3> float]]]]]
       @[[<7>
          update
-         @+=
+         +=
          [<9>
           identifier
           [<4>
@@ -1302,7 +1302,6 @@
   `))
 
 (deftest "for loop"
-  (def p (variable/new "p" type/vec3))
   (test-function
     (jlsl/fn :float "distance" []
       (for (var i 10) (< i 10) (++ i)
