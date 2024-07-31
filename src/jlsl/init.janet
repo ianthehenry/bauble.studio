@@ -3,6 +3,7 @@
 (import pat)
 (use ./util)
 (use ./adt)
+(import ../glsl)
 
 (defadt variable
   (dynamic id name type)
@@ -960,6 +961,10 @@
             ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render/param params)]))))
     results))
 
+
+(defmacro* test-function [expr & results]
+  ~(test-stdout (,prin (,glsl/render-program (,render/function ,expr))) ,;results))
+
 (test (render/function (jlsl/defn :float incr [:float x]
   (return (+ x 1))))
   @[[defn
@@ -969,7 +974,7 @@
      [return [+ x 1]]]])
 
 (deftest "only referenced functions are included"
-  (test (render/function (do
+  (test-function (do
     (jlsl/defn :float square [:float x]
       (return (* x x)))
 
@@ -977,78 +982,69 @@
       (return (* x x x)))
 
     (jlsl/defn :float foo [:float x]
-      (return (+ (square x) 1)))))
-    @[[defn
-       :float
-       square
-       [:float x]
-       [return [* x x]]]
-      [defn
-       :float
-       foo
-       [:float x]
-       [return [+ [square x] 1]]]]))
+      (return (+ (square x) 1)))) `
+    float square(float x) {
+      return x * x;
+    }
+    
+    float foo(float x) {
+      return square(x) + 1.0;
+    }
+  `))
 
 (deftest "recursive functions"
-  (test (render/function (do
+  (test-function
     (jlsl/defn :float foo [:float x]
-      (return (foo x)))))
-    @[[defn
-       :float
-       foo
-       [:float x]
-       [return [foo x]]]]))
+      (return (foo x))) `
+    float foo(float x) {
+      return foo(x);
+    }
+  `))
 
 (deftest "mutually recursive functions generate forward declarations"
-  (test (render/function (do
+  (test-function (do
     (jlsl/declare :float bar [:float])
 
     (jlsl/defn :float foo [:float x]
       (return (bar x)))
 
     (jlsl/implement :float bar [:float x]
-      (return (foo x)))))
-    @[[defn :float "bar" [:float x]]
-      [defn
-       :float
-       foo
-       [:float x]
-       [return [bar x]]]
-      [defn
-       :float
-       bar
-       [:float x]
-       [return [foo x]]]]))
+      (return (foo x)))) `
+    float bar(float x);
+    
+    float foo(float x) {
+      return bar(x);
+    }
+    
+    float bar(float x) {
+      return foo(x);
+    }
+  `))
 
 (deftest "anonymous functions"
-  (test (render/function
+  (test-function
     (jlsl/fn :float "foo" [:float x]
-      (return (+ x 1))))
-    @[[defn
-       :float
-       foo
-       [:float x]
-       [return [+ x 1]]]]))
+      (return (+ x 1))) `
+    float foo(float x) {
+      return x + 1.0;
+    }
+  `))
 
 (deftest "function with out and inout parameters"
-  (test (render/function (do
+  (test-function
     (jlsl/defn :float foo [:float x [in :float] y [out :float] z [inout :float] w]
-      (return (foo x y z w)))))
-    @[[defn
-       :float
-       foo
-       [:float
-        x
-        :float
-        y
-        [out :float]
-        z
-        [inout :float]
-        w]
-       [return [foo x y z w]]]]))
+      (return (foo x y z w))) `
+    float foo(float x, float y, out float z, inout float w) {
+      return foo(x, y, z, w);
+    }
+  `))
+
+(defn show-implicit-params [function]
+  (map |[(type/to-glsl (param/type $)) (variable/name (param/var $)) (param/access $)]
+    (function/implicit-params function)))
 
 (deftest "function with no free variables"
-  (test (function/implicit-params
+  (test (show-implicit-params
     (jlsl/fn :float "name" [:float x]
       (return (+ x 1))))
     @[]))
@@ -1056,101 +1052,64 @@
 (deftest "function with simple free variable"
   (def free (variable/new "free" type/float))
 
-  (test (function/implicit-params
+  (test (show-implicit-params
     (jlsl/fn :float "name" [:float x]
       (return (+ x free))))
-    @[[[<1>
-        lexical
-        <2>
-        "free"
-        [<3> primitive [<4> float]]]
-       [[<3> primitive [<4> float]] :in]]]))
+    @[[:float "free" :in]]))
 
 (deftest "function with out free variable"
   (def free (variable/new "free" type/float))
 
-  (test (function/implicit-params
+  (test (show-implicit-params
     (jlsl/fn :float "name" [:float x]
       (set free 100)
       (return x)))
-    @[[[<1>
-        lexical
-        <2>
-        "free"
-        [<3> primitive [<4> float]]]
-       [[<3> primitive [<4> float]] :out]]]))
+    @[[:float "free" :out]]))
 
 (deftest "function with inout free variable"
   (def free (variable/new "free" type/float))
 
-  (test (function/implicit-params
+  (test (show-implicit-params
     (jlsl/fn :float "name" [:float x]
       (+= free 100)
       (return x)))
-    @[[[<1>
-        lexical
-        <2>
-        "free"
-        [<3> primitive [<4> float]]]
-       [[<3> primitive [<4> float]] :inout]]]))
-
+    @[[:float "free" :inout]]))
 
 (deftest "outness projects through field and array access"
   (def free1 (variable/new "free1" type/vec3))
   (def free2 (variable/new "free2" type/vec3))
 
-  (test (function/implicit-params
+  (test (show-implicit-params
     (jlsl/fn :float "name" [:float x]
       (set (. free1 x) 100)
       (+= (. free2 xyz) 100)
       # TODO: add arrays here, once we add arrays
       # (set ((in free2 0) x) 100)
       (return x)))
-    @[[[<1>
-        lexical
-        <2>
-        "free1"
-        [<3> vec [<4> float] 3]]
-       [[<3> vec [<4> float] 3] :out]]
-      [[<1>
-        lexical
-        <5>
-        "free2"
-        [<3> vec [<4> float] 3]]
-       [[<3> vec [<4> float] 3] :inout]]]))
-
+    @[[:vec3 "free1" :out]
+      [:vec3 "free2" :inout]]))
 
 (deftest "function that calls another function with a free variable"
   (def free (variable/new "free" type/float))
 
-  (test (function/implicit-params (do
+  (test (show-implicit-params (do
     (jlsl/defn :float foo [:float x]
       (return (+ x free)))
 
     (jlsl/fn :float "name" [:float x]
       (return (foo x)))))
-    @[[[<1>
-        lexical
-        <2>
-        "free"
-        [<3> primitive [<4> float]]]
-       [[<3> primitive [<4> float]] :in]]]))
+    @[[:float "free" :in]]))
 
 (deftest "recursive functions with free variables"
   (def free (variable/new "free" type/float))
-  (test (function/implicit-params (do
+  (test (show-implicit-params (do
     (jlsl/defn :float foo [:float x]
       (return (foo (+ x free))))))
-    @[[[<1>
-        lexical
-        <2>
-        "free"
-        [<3> primitive [<4> float]]]
-       [[<3> primitive [<4> float]] :in]]]))
+    @[[:float "free" :in]]))
 
 (deftest "mutually recursive functions with free variables"
   (def free (variable/new "free" type/float))
-  (test (function/implicit-params (do
+  (test (show-implicit-params (do
     (jlsl/declare :float bar [:float])
 
     (jlsl/defn :float foo [:float x]
@@ -1158,15 +1117,10 @@
 
     (jlsl/implement :float bar [:float x]
       (return (foo x)))))
-    @[[[<1>
-        lexical
-        <2>
-        "free"
-        [<3> primitive [<4> float]]]
-       [[<3> primitive [<4> float]] :in]]])
+    @[[:float "free" :in]])
 
-  (def free2 (variable/new "free" type/float))
-  (test (function/implicit-params (do
+  (def free2 (variable/new "free2" type/float))
+  (test (show-implicit-params (do
     (jlsl/declare :float bar [:float])
 
     (jlsl/defn :float foo [:float x]
@@ -1174,41 +1128,21 @@
 
     (jlsl/implement :float bar [:float x]
       (return (foo (+ x free))))))
-    @[[[<1>
-        lexical
-        <2>
-        "free"
-        [<3> primitive [<4> float]]]
-       [[<3> primitive [<4> float]] :in]]
-      [[<1>
-        lexical
-        <5>
-        "free"
-        [<3> primitive [<4> float]]]
-       [[<3> primitive [<4> float]] :in]]])
+    @[[:float "free" :in]
+      [:float "free2" :in]])
   )
 
 (deftest "variables should be reference-unique"
   (def free1 (variable/new "free" type/float))
   (def free2 (variable/new "free" type/float))
-  (test (function/implicit-params (do
+  (test (show-implicit-params
     (jlsl/defn :float foo [:float x]
-      (return (+ x (+ free1 free2))))))
-    @[[[<1>
-        lexical
-        <2>
-        "free"
-        [<3> primitive [<4> float]]]
-       [[<3> primitive [<4> float]] :in]]
-      [[<1>
-        lexical
-        <5>
-        "free"
-        [<3> primitive [<4> float]]]
-       [[<3> primitive [<4> float]] :in]]]))
+      (return (+ x (+ free1 free2)))))
+    @[[:float "free" :in]
+      [:float "free" :in]]))
 
 (deftest "function invocations only pick up free variables that are free at the function's callsite"
-  (test (function/implicit-params
+  (test (show-implicit-params
     (jlsl/defn :float foo [:float x]
       (return ((jlsl/fn :float "bar" [:float y] (return (* x y))) x))))
     @[]))
@@ -1218,7 +1152,7 @@
 (deftest "builtins are variadic"
   (def free1 (variable/new "free" type/float))
   (def free2 (variable/new "free" type/float))
-  (test-error (function/implicit-params (do
+  (test-error (show-implicit-params (do
     (jlsl/defn :float foo [:float x]
       (return (+ x free1 free2)))))
     "wrong number of arguments to function +, expected 2, got 3"))
@@ -1228,60 +1162,49 @@
   (def free2 (variable/new "free" type/float))
   (def free3 (variable/new "x" type/float))
   (def free4 (variable/new "y" type/float))
-  (test (render/function
+  (test-function
     (jlsl/defn :float foo [:float x]
-      (return (+ (+ free1 free2) (+ free3 free4)))))
-    @[[defn
-       :float
-       foo
-       [:float
-        x
-        :float
-        free
-        :float
-        free1
-        :float
-        x1
-        :float
-        y]
-       [return [+ [+ free free1] [+ x1 y]]]]]))
+      (return (+ (+ free1 free2) (+ free3 free4)))) `
+    float foo(float x, float free, float free1, float x1, float y) {
+      return (free + free1) + (x1 + y);
+    }
+  `))
 
 # TODO: we could optimize this, and realize that the shadow is allowed if the other identifier
 # is not referenced again in the current scope. But... that is a micro-optimization of the
 # aesthetics of the generated code.
 (deftest "variables get unique identifiers even if they're shadowing another lexical variable"
-  (test (render/function
+  (test-function
     (jlsl/defn :float foo [:float x]
       (var x 10)
       (do
         (var x 20))
-      (return 1)))
-    @[[defn
-       :float
-       foo
-       [:float x]
-       [var :float x1 10]
-       [do [var :float x2 20]]
-       [return 1]]]))
+      (return 1)) `
+    float foo(float x) {
+      float x1 = 10.0;
+      {
+        float x2 = 20.0;
+      }
+      return 1.0;
+    }
+  `))
 
 (deftest "function calls automatically forward free variables"
-  (test (render/function
+  (test-function
     (jlsl/defn :float foo [:float x]
-      (return ((jlsl/fn :float "bar" [:float y] (return (* x y))) x))))
-    @[[defn
-       :float
-       bar
-       [:float y :float x]
-       [return [* x y]]]
-      [defn
-       :float
-       foo
-       [:float x]
-       [return [bar x x]]]]))
+      (return ((jlsl/fn :float "bar" [:float y] (return (* x y))) x))) `
+    float bar(float y, float x) {
+      return x * y;
+    }
+    
+    float foo(float x) {
+      return bar(x, x);
+    }
+  `))
 
 (deftest "free variable forwarding happens through function calls"
   (def free (variable/new "free" type/float))
-  (test (render/function (do
+  (test-function (do
     (jlsl/defn :float qux [:float x]
       (return (+ x free)))
 
@@ -1289,26 +1212,23 @@
       (return (qux x)))
 
     (jlsl/defn :float foo [:float x]
-      (return (bar x)))))
-    @[[defn
-       :float
-       qux
-       [:float x :float free]
-       [return [+ x free]]]
-      [defn
-       :float
-       bar
-       [:float x :float free]
-       [return [qux x free]]]
-      [defn
-       :float
-       foo
-       [:float x :float free]
-       [return [bar x free]]]]))
+      (return (bar x)))) `
+    float qux(float x, float free) {
+      return x + free;
+    }
+    
+    float bar(float x, float free) {
+      return qux(x, free);
+    }
+    
+    float foo(float x, float free) {
+      return bar(x, free);
+    }
+  `))
 
 (deftest "free variable forwarding happens even with mutual recursion"
   (def free (variable/new "free" type/float))
-  (test (render/function (do
+  (test-function (do
     (jlsl/declare :float foo [:float])
 
     (jlsl/defn :float bar [:float x]
@@ -1318,85 +1238,78 @@
       (return (+ x free)))
 
     (jlsl/implement :float foo [:float x]
-      (return (+ (bar x) (qux x))))))
-    @[[defn :float "foo" [:float x]]
-      [defn
-       :float
-       bar
-       [:float x :float free]
-       [return [foo x free]]]
-      [defn
-       :float
-       qux
-       [:float x :float free]
-       [return [+ x free]]]
-      [defn
-       :float
-       foo
-       [:float x :float free]
-       [return [+ [bar x free] [qux x free]]]]]))
+      (return (+ (bar x) (qux x))))) `
+    float foo(float x);
+    
+    float bar(float x, float free) {
+      return foo(x, free);
+    }
+    
+    float qux(float x, float free) {
+      return x + free;
+    }
+    
+    float foo(float x, float free) {
+      return bar(x, free) + qux(x, free);
+    }
+  `))
 
 (deftest "with statements"
   (def p (variable/new "p" type/vec3))
-  (test (render/function
+  (test-function
     (jlsl/defn :float distance []
       (with [p [0 0 0]]
-        (return p))))
-    @[[defn
-       :float
-       distance
-       []
-       [do
-        [var :vec3 p [vec3 0 0 0]]
-        [return p]]]]))
+        (return p))) `
+    float distance() {
+      {
+        vec3 p = vec3(0.0, 0.0, 0.0);
+        return p;
+      }
+    }
+  `))
 
 (deftest "dynamic variable"
   (def p (variable/new "p" type/vec3))
-  (test (render/function (do
+  (test-function (do
     (jlsl/defn :float sphere [:float r]
       (return (- (length p) r)))
 
+    # TODO: rename vec- to -
     (jlsl/defn :float translated []
       (with [p (builtins/vec- p [10 20 30])]
         (return (sphere 20))))
 
     (jlsl/defn :float distance []
       (with [p [0 0 0]]
-        (return (translated)))))
-    )
-    @[[defn
-       :float
-       sphere
-       [:float r :vec3 p]
-       [return [- [length p] r]]]
-      [defn
-       :float
-       translated
-       [:vec3 p]
-       [do
-        [var :vec3 p1 [vec- p [vec3 10 20 30]]]
-        [return [sphere 20 p1]]]]
-      [defn
-       :float
-       distance
-       []
-       [do
-        [var :vec3 p [vec3 0 0 0]]
-        [return [translated p]]]]]))
+        (return (translated))))) `
+    float sphere(float r, vec3 p) {
+      return length(p) - r;
+    }
+    
+    float translated(vec3 p) {
+      {
+        vec3 p1 = vec_(p, vec3(10.0, 20.0, 30.0));
+        return sphere(20.0, p1);
+      }
+    }
+    
+    float distance() {
+      {
+        vec3 p = vec3(0.0, 0.0, 0.0);
+        return translated(p);
+      }
+    }
+  `))
 
 (deftest "for loop"
   (def p (variable/new "p" type/vec3))
-  (test (render/function (do
-    (jlsl/defn :float distance []
+  (test-function
+    (jlsl/fn :float "distance" []
       (for (var i 10) (< i 10) (++ i)
-        (break))
-      )))
-    @[[defn
-       :float
-       distance
-       []
-       [for
-        [var :float i 10]
-        [< i 10]
-        [++ i]
-        [break]]]]))
+        (break))) `
+    float distance() {
+      for (float i = 10.0; i < 10.0; ++i) {
+        break;
+      }
+    }
+  `))
