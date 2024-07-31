@@ -392,8 +392,14 @@
               :out (see-expr arg :write)
               :inout (do (see-expr arg :read) (see-expr arg :write))
               access (errorf "BUG: unknown access qualifier %q" access))))
-        (dot expr _) (see-expr expr rw)
-        (in expr index) (do (see-expr expr rw) (see-expr index :read))
+        (dot expr _) (do
+          # okay so technically if the field is the entire thing,
+          # e.g. if you have `foo.xyz = vec3(1, 2, 3)`, then the
+          # read here is unnecessary. But just... just set `foo`
+          # instead.
+          (see-expr expr :read)
+          (see-expr expr rw))
+        (in expr index) (do (see-expr expr :read) (see-expr expr rw) (see-expr index :read))
         (crement _ expr) (do (see-expr expr :read) (see-expr expr :write))
         ))
 
@@ -1148,9 +1154,9 @@
       (+= (. free2 xyz) 100)
       (set (. (in free3 0) x) 100)
       (return x)))
-    @[[:vec3 "free1" :out]
+    @[[:vec3 "free1" :inout]
       [:vec3 "free2" :inout]
-      [[:vec3 5] "free3" :out]]))
+      [[:vec3 5] "free3" :inout]]))
 
 (deftest "function that calls another function with a free variable"
   (def free (variable/new "free" type/float))
@@ -1407,5 +1413,41 @@
     float foo() {
       float x = 0.0;
       return bar(x);
+    }
+  `))
+
+(deftest "setting a component of a vector has to be an inout parameter"
+  (test-function
+    (jlsl/fn :float "foo" []
+      (var foo [1 2 3])
+      (return ((jlsl/fn :float "bar" []
+        (set (. foo x) 0))))) `
+    float bar(inout vec3 foo) {
+      foo.x = 0.0;
+    }
+    
+    float foo() {
+      vec3 foo = vec3(1.0, 2.0, 3.0);
+      return bar(foo);
+    }
+  `))
+
+(deftest "there is a difference between setting a vector and setting all of its components"
+  (test-function
+    (jlsl/fn :float "foo" []
+      (var foo [0 0 0])
+      (var bar [0 0 0])
+      (return ((jlsl/fn :float "helper" []
+        (set (. foo xyz) [1 2 3])
+        (set bar [1 2 3]))))) `
+    float helper(inout vec3 foo, out vec3 bar) {
+      foo.xyz = vec3(1.0, 2.0, 3.0);
+      bar = vec3(1.0, 2.0, 3.0);
+    }
+    
+    float foo() {
+      vec3 foo = vec3(0.0, 0.0, 0.0);
+      vec3 bar = vec3(0.0, 0.0, 0.0);
+      return helper(foo, bar);
     }
   `))
