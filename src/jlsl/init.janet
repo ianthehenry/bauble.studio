@@ -345,6 +345,15 @@
         (array/concat current-params params)))
     t)
 
+  (defn root-identifier [expr]
+    (expr/match expr
+      (literal _ _) nil
+      (identifier variable) variable
+      (call function args) nil
+      (dot expr _) (root-identifier expr)
+      (in expr index) (root-identifier expr)
+      (crement _ expr) nil))
+
   # returns free variables and all referenced functions
   (defn scan [name body params]
     (assertf (not (empty? body)) "%s: cannot find free variables of a function that has not been implemented yet" name)
@@ -406,7 +415,12 @@
           (put scope variable true))
         (assign l-value r-value) (do
           (see-expr l-value :write)
-          (see-expr r-value :read))
+          (see-expr r-value :read)
+          # it's not actually in scope, but it's no longer
+          # exactly free. if we read the value after this,
+          # we don't need to mark it as read-free, and we've
+          # already marked it write-free
+          (put scope (root-identifier l-value) true))
         (update op l-value r-value) (do
           (see-expr l-value :read)
           (see-expr l-value :write)
@@ -1375,5 +1389,23 @@
         total += foos[i];
       }
       return total;
+    }
+  `))
+
+(deftest "reading a free variable after setting it does not mark it inout"
+  (test-function
+    (jlsl/fn :float "foo" []
+      (var x 0)
+      (return ((jlsl/fn :float "bar" []
+        (set x 0)
+        (+= x 1))))) `
+    float bar(out float x) {
+      x = 0.0;
+      x += 1.0;
+    }
+    
+    float foo() {
+      float x = 0.0;
+      return bar(x);
     }
   `))
