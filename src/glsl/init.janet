@@ -156,6 +156,11 @@
     |boolean? (printer/prin p (string expression))
     |number? (printer/prin p (to-float expression))))
 
+(defn format-type [type]
+  (if (and (ptuple? type) (= (length type) 2))
+    (string/format "%s[%d]" (format-type (in type 0)) (in type 1))
+    type))
+
 (varfn render-statement [p statement &named newline-after-block? one-line? semicolon?]
   (default newline-after-block? true)
   (default semicolon? true)
@@ -163,12 +168,12 @@
   (var semicolon? semicolon?)
   (pat/match statement
     ['def type name value] (do
-      (printer/prin p "const " type " " (identifier name) " = ")
+      (printer/prin p "const " (format-type type) " " (identifier name) " = ")
       (render-expression p value))
     ['var type name] (do
-      (printer/prin p type " " (identifier name)))
+      (printer/prin p (format-type type) " " (identifier name)))
     ['var type name value] (do
-      (printer/prin p type " " (identifier name) " = ")
+      (printer/prin p (format-type type) " " (identifier name) " = ")
       (render-expression p value))
     ['set dest value] (do
       (render-expression p dest)
@@ -252,13 +257,17 @@
   (when semicolon?
     ((if one-line? printer/prin printer/print) p ";")))
 
-(defn- format-args [args]
+(defn- format-params [params]
   (->
-    (seq [[sig arg] :in (partition 2 args)]
-      (string/join [;(if (btuple? sig) sig [sig]) (identifier arg)] " "))
+    (seq [[sig arg] :in (partition 2 params)]
+      (string/join [;(if (and (btuple? sig) (= (length sig) 2))
+        [(in sig 0) (format-type (sig 1))] [(format-type sig)]) (identifier arg)] " "))
     (string/join ", ")))
 
-(test (format-args [:foo 'name :bar 'other]) "foo name, bar other")
+(test (format-params '[:foo name :bar other]) "foo name, bar other")
+(test (format-params '[(:foo 10) name :bar other]) "foo[10] name, bar other")
+(test (format-params '[((:foo 10) 10) name :bar other]) "foo[10][10] name, bar other")
+(test (format-params '[[out (:foo 10)] name :bar other]) "out foo[10] name, bar other")
 
 (defn render-toplevel [p toplevel]
   (pat/match toplevel
@@ -268,8 +277,8 @@
         (each field (partition 2 fields)
           (render-statement p ~(var ,;field))))
       (printer/newline p))
-    ['defn type name args & body] (do
-      (printer/prin p type " " (identifier name) "(" (format-args args) ")")
+    ['defn type name params & body] (do
+      (printer/prin p type " " (identifier name) "(" (format-params params) ")")
       (if (empty? body)
         (printer/print p ";")
         (do
