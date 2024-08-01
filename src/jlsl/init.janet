@@ -258,8 +258,8 @@
 
 (test (jlsl/defn :void foo [:float x :float y]
   (var z 0)
-  #(for (var i 0) (< i 10) (++ i)
-  #  (+= z i))
+  (for (var i 0) (< i 10) (++ i)
+    (+= z i))
   (return (+ x y z)))
   [<1>
    custom
@@ -275,6 +275,68 @@
               literal
               [<4> primitive [<5> float]]
               0]]
+            [<7>
+             for
+             [<7>
+              declaration
+              false
+              [<2>
+               lexical
+               <10>
+               "i"
+               [<4> primitive [<5> float]]]
+              [<9>
+               literal
+               [<4> primitive [<5> float]]
+               0]]
+             [<9>
+              call
+              [<1>
+               builtin
+               "<"
+               [<4> primitive [<5> bool]]
+               @[[[<4> primitive [<5> float]] :in]
+                 [[<4> primitive [<5> float]] :in]]]
+              @[[<9>
+                 identifier
+                 [<2>
+                  lexical
+                  <10>
+                  "i"
+                  [<4> primitive [<5> float]]]]
+                [<9>
+                 literal
+                 [<4> primitive [<5> float]]
+                 10]]]
+             [<7>
+              expr
+              [<9>
+               crement
+               ++
+               [<9>
+                identifier
+                [<2>
+                 lexical
+                 <10>
+                 "i"
+                 [<4> primitive [<5> float]]]]]]
+             @[[<7>
+                update
+                +=
+                [<9>
+                 identifier
+                 [<2>
+                  lexical
+                  <8>
+                  "z"
+                  [<4> primitive [<5> float]]]]
+                [<9>
+                 identifier
+                 [<2>
+                  lexical
+                  <10>
+                  "i"
+                  [<4> primitive [<5> float]]]]]]]
             [<7>
              return
              [<9>
@@ -325,7 +387,7 @@
                 "y"
                 [<4> primitive [<5> float]]]
                [[<4> primitive [<5> float]] :in]]]
-    :scan-ref @[[<10> unscanned]]}])
+    :scan-ref @[[<11> unscanned]]}])
 
 # ----------
 
