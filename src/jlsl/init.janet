@@ -1024,8 +1024,6 @@
           (def implicit-params (function/implicit-params node))
           # TODO: we should make sure we're actually generating a unique name
           (def glsl-name (symbol name))
-          # TODO: hoist free variables
-          # TODO: we need to come up with preferred glsl names for these variables
           (def glsl ~(defn ,(type/to-glsl return-type) ,glsl-name [,;(mapcat render/param [;params ;implicit-params])]
             ,;(map render/statement body)))
           (array/push results glsl)))))
