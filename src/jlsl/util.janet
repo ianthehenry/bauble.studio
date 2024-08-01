@@ -153,3 +153,25 @@
   (tuple/slice (map ;args)))
 
 (defn const [x] (fn [&] x))
+
+(defmodule bimap
+  (defn new [&opt proto]
+    (if proto
+      [(table/setproto @{} (in proto 0))
+       (table/setproto @{} (in proto 1))]
+       [@{} @{}]))
+  (def- core/in in)
+  (def- core/put put)
+  (def- core/has-key? has-key?)
+  (defn in [[forward _] key] (core/in forward key))
+  (defn out [[_ backward] value] (core/in backward value))
+  (defn put [[forward backward] k v]
+    (core/put forward k v)
+    (core/put backward v k)
+    v)
+  (defn has-key? [[forward _] k] (core/has-key? forward k))
+  (defn has-value? [[_ backward] v] (core/has-key? backward v)))
+
+(def- core/dyn dyn)
+(defn dyn [dynvar]
+  (or (core/dyn dynvar) (errorf "%q is not set" dynvar)))
