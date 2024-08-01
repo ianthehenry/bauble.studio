@@ -151,3 +151,5 @@
 
 (defn tmap [& args]
   (tuple/slice (map ;args)))
+
+(defn const [x] (fn [&] x))
