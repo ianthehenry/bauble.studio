@@ -87,6 +87,20 @@
 (defbinop * -2)
 (defbinop / -1)
 
+(defn resolve-vec-constructor [name arg-types]
+  (check-arity name -1 arg-types)
+  (def base-type (get-unique type/base-type arg-types))
+  (def components (sum (map type/components arg-types)))
+  (unless (>= components 2)
+    (error "vector constructor needs at least two components"))
+  (unless (<= components 4)
+    (error "vector constructor cannot have more than four components"))
+  (def constructor (primitive-type/vec-prefix base-type))
+  (builtin
+    (string constructor components)
+    (type/vec base-type components)
+    arg-types))
+
 (register < (resolve-comparison-op "lessThan"))
 (register > (resolve-comparison-op "greaterThan"))
 (register <= (resolve-comparison-op "lessThanEqual"))
@@ -95,6 +109,7 @@
 (register not-equal (resolve-comparison-op) "notEqual")
 (register = resolve-simple-comparison-op)
 (register not= resolve-simple-comparison-op)
+(register vec resolve-vec-constructor)
 
 (register length (fn [name arg-types]
   (check-arity name 1 arg-types)

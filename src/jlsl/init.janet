@@ -20,9 +20,6 @@
     (custom impl) impl
     (builtin name _ _) (errorf "cannot implement builtin %s" name)))
 
-(defn parse-callable [ast]
-  (or (if-let [f (in builtins ast)] ~',f ast)))
-
 (defmodule expr
   (defn type [t]
     (expr/match t
@@ -33,23 +30,11 @@
       (in expr _) (type/element-type (type expr))
       (crement _ expr) (type expr)))
 
-  (defn vector [& exprs]
-    (assert (not (empty? exprs)) "vector cannot be empty")
-    (def base-type (get-unique (>> type type/base-type) exprs))
-    (def components (sum (map (>> type type/components) exprs)))
-    (def constructor (primitive-type/vec-prefix base-type))
-    # TODO: this should really return a function call node...
-    # we can share this type resolution across other generic functions
-    # i think
-    (expr/call
-      (function/builtin
-        (symbol constructor components)
-        (type/vec base-type components)
-        (map (>> type param-sig/in) exprs))
-      exprs))
-
-  (defn call [general-function args]
+  (defn- call [general-function args]
     (expr/call (resolve-function general-function (tmap type args)) args))
+
+  (defn- parse-callable [ast]
+    (or (if-let [f (in builtins ast)] ~',f ast)))
 
   (defn of-ast [expr-ast]
     (pat/match expr-ast
@@ -57,7 +42,7 @@
       |boolean? [expr/literal ['quote type/bool] expr-ast]
       |number? [expr/literal ['quote type/float] expr-ast]
       |symbol? [expr/identifier expr-ast]
-      |btuple? [vector ;(map of-ast expr-ast)]
+      |btuple? [call ~',(in builtins 'vec) (map of-ast expr-ast)]
       ['. expr field] [expr/dot (of-ast expr) ['quote field]]
       ['in expr index] [expr/in (of-ast expr) (of-ast index)]
       [(and op (or '++ '-- '_++ '_--)) expr] [expr/crement ['quote op] (of-ast expr)]
@@ -199,7 +184,7 @@
       (def <4> [(upscope (def <5> (@new (@type/primitive (quote (<2> float))) :in)) (def x (@new "x" (@type <5>))) (@new x <5>)) (upscope (def <6> (@new (@type/primitive (quote (<2> float))) :in)) (def y (@new "y" (@type <6>))) (@new y <6>))])
       (def <7> @[])
       (@array/push <7> (upscope (def <8> (@expr/literal (quote (<1> primitive (<2> float))) 1)) (def <9> (@type <8>)) (def x (@new "x" <9>)) (@statement/declaration false x <8>)))
-      (@array/push <7> (@statement/return (@vector (@expr/identifier x) (@expr/literal (quote (<1> primitive (<2> float))) 2) (@expr/literal (quote (<1> primitive (<2> float))) 3))))
+      (@array/push <7> (@statement/return (@call (quote @{:name "vec" :overloads "<function 0x1>"}) @[(@expr/identifier x) (@expr/literal (quote (<1> primitive (<2> float))) 2) (@expr/literal (quote (<1> primitive (<2> float))) 3)])))
       (@function/custom (@implement (@resolve-impl foo (@tmap @type <4>)) <3> <4> <7>)))))
 
 (test (jlsl/defn :void foo [:float x :float y]
@@ -932,4 +917,31 @@
       (return (equal 1 2)))
     "you must use the operator form for scalars")
 
+  )
+
+(deftest "vector constructors"
+  (test-function
+    (jlsl/fn :float "foo" []
+      (return [1 2])
+      (return [1 2 3])
+      (return [1 2 3 4])
+      (return (vec 1 2 3 4))
+      (return (vec (. [1 2 3] xy) 3 4))
+      ) `
+    float foo() {
+      return vec2(1.0, 2.0);
+      return vec3(1.0, 2.0, 3.0);
+      return vec4(1.0, 2.0, 3.0, 4.0);
+      return vec4(1.0, 2.0, 3.0, 4.0);
+      return vec4(vec3(1.0, 2.0, 3.0).xy, 3.0, 4.0);
+    }
+  `)
+  (test-error
+    (jlsl/fn :float "foo" []
+      (return [1]))
+    "vector constructor needs at least two components")
+  (test-error
+    (jlsl/fn :float "foo" []
+      (return []))
+    "vec needs at least 1 arguments but you gave it 0")
   )
