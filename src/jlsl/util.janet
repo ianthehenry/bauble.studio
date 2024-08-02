@@ -16,10 +16,10 @@
 (defmacro assertf [x & args]
   ~(assert ,x (string/format ,;args)))
 
-(defn get-unique [f ind]
+(defn get-unique [f ind on-error]
   (pat/match (distinct (map f ind))
     [unique] unique
-    values (errorf "no unique value %q" values)))
+    (on-error)))
 
 (defn >> [f g] |(g (f ;$&)))
 (defn << [f g] |(f (g ;$&)))
@@ -173,5 +173,9 @@
   (defn has-value? [[_ backward] v] (core/has-key? backward v)))
 
 (def- core/dyn dyn)
-(defn dyn [dynvar]
-  (or (core/dyn dynvar) (errorf "%q is not set" dynvar)))
+(defn dyn [dynvar & dflt]
+  (assert (<= (length dflt) 1) "too many arguments")
+  (or (core/dyn dynvar)
+    (if (empty? dflt)
+      (errorf "%q is not set" dynvar)
+      (in dflt 0))))

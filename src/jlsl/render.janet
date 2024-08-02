@@ -1,34 +1,21 @@
 (use judge)
+(use module)
 (import pat)
 (use ./util)
 (import ../glsl)
+(use ./expr)
 (use ./types)
 (use ./dsl)
 
 # TODO: this should be private, but there is no defdyn-
 (defdyn *identifier-map*)
 
-(defn- render/expr [t] # and *identifier-map*
-  (expr/match t
-    (literal _ value) value
-    (identifier variable)
-      (or (bimap/in (dyn *identifier-map*) variable)
-        (errorf "BUG: variable %q is not in scope. This shouldn't happen, but it happened. How did it happen?"
-          variable))
-    (call function args)
-      # TODO: need to allocate GLSL names
-      [(symbol (function/name function))
-        ;(map render/expr args)
-        ;(map |(render/expr (expr/identifier (param/var $))) (function/implicit-params function))]
-    (dot expr field) ['. (render/expr expr) field]
-    (in expr index) ['in (render/expr expr) (render/expr index)]
-    (crement op expr) [op (render/expr expr)]))
+(defn resolve-identifier [variable] # and *identifier-map*
+  (or (bimap/in (dyn *identifier-map*) variable)
+    (errorf "BUG: variable %q is not in scope. This shouldn't happen, but it happened. How did it happen?"
+      variable)))
 
-(defmacro- subscope [& exprs]
-  ~(with-dyns [,*identifier-map* (,bimap/new (,dyn ,*identifier-map*))]
-    ,;exprs))
-
-(defn- new-identifier [variable] # and *identifier-map*
+(defn- allocate-identifier [variable] # and *identifier-map*
   (def identifier-map (dyn *identifier-map*))
   (var identifier (symbol (variable/name variable)))
   # there might be a more efficient way to do this, but who cares
@@ -38,6 +25,27 @@
     (++ i))
   (bimap/put identifier-map variable identifier))
 
+(defn- render/expr [t] # and *identifier-map*
+  (expr/match t
+    (literal _ value) value
+    (identifier variable) (resolve-identifier variable)
+    (call function args)
+      # TODO: need to allocate GLSL names
+      [(symbol (function/name function))
+        ;(map render/expr args)
+        ;(map |(render/expr (expr/identifier (param/var $))) (function/implicit-params function))]
+    (dot expr field) ['. (render/expr expr) field]
+    (in expr index) ['in (render/expr expr) (render/expr index)]
+    (crement op expr) [op (render/expr expr)]))
+
+(defn inherit-or-new-scope [] (bimap/new (dyn *identifier-map* nil)))
+(defn inherit-scope [] (bimap/new (dyn *identifier-map*)))
+(defn new-scope [] (bimap/new))
+
+(defmacro- subscope [& exprs]
+  ~(with-dyns [,*identifier-map* (,inherit-scope)]
+    ,;exprs))
+
 (defn- render/statement [t] # and *identifier-map*
   (statement/match t
     (declaration const? variable expr) (do
@@ -45,7 +53,7 @@
       (def rendered-expr (render/expr expr))
       [(if const? 'def 'var)
         (type/to-glsl (variable/type variable))
-        (new-identifier variable)
+        (allocate-identifier variable)
         rendered-expr])
     (assign l-value r-value)
       ['set (render/expr l-value) (render/expr r-value)]
@@ -76,15 +84,17 @@
   )
 
 (defn- render/param [param] # and *identifier-map*
-  [(param-sig/to-glsl (param/sig param)) (new-identifier (param/var param))])
+  [(param-sig/to-glsl (param/sig param)) (allocate-identifier (param/var param))])
 
-(defn render/function [function]
+(defn render/function [root-function &opt root-variables]
+  (assert (function? root-function) "render/function called with a non-function. did you forget to resolve a multifunction?")
+  (default root-variables [])
   (def forwards @{})
   (def results @[])
   (def in-progress @{})
   (def finished @{})
 
-  (visit function (fn [node visiting? stack]
+  (visit root-function (fn [node visiting? stack]
     (unless (function? node) (break))
 
     (when visiting?
@@ -93,12 +103,27 @@
         (put forwards node true))
       (break))
 
+    # TODO: we use inherit-or-new-scope so that we can call render/function in
+    # tests without having to create a dummy root scope. maybe not worth it
+    # We inherit in the root function so that it has uniforms, inputs, and outputs
+    # in scope already. But for non-root functions, we're going to forward uniforms
+    # etc. as normal implicit arguments. We could revisit this at some points in
+    # the future, but I expect that GLSL compilers are smart enough that it doesn't
+    # make a difference.
+    (def function-scope (if (= node root-function) (inherit-or-new-scope) (new-scope)))
+    (def root-variable-set (tabseq [variable :in root-variables] variable true))
+
     (function/match node
       (builtin _ _ _) nil
       (custom {:name name :declared-return-type return-type :params params :body body})
-        (with-dyns [*identifier-map* (bimap/new)]
+        (with-dyns [*identifier-map* function-scope]
           (assertf (not (empty? body)) "%s: unimplemented function" name)
-          (def implicit-params (function/implicit-params node))
+          (def implicit-params
+            (if (= node root-function)
+              (filter |(not (has-key? root-variable-set (param/var $)))
+                (function/implicit-params node))
+              (function/implicit-params node)))
+
           # TODO: we should make sure we're actually generating a unique name
           (def glsl-name (symbol name))
           (def glsl ~(defn ,(type/to-glsl return-type) ,glsl-name [,;(mapcat render/param [;params ;implicit-params])]
@@ -114,8 +139,280 @@
             ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render/param params)]))))
     results))
 
+(defn validate-program [program]
+  (def {:main main :inputs inputs :outputs outputs :uniforms uniforms} program)
+  (def return-type (function/return-type main))
+  (def implicit-params (function/implicit-params main))
+  (type/match return-type
+    (void) nil
+    (errorf "main must return void" return-type))
+
+  (each param implicit-params
+    (var variable (param/var param))
+    (match (param/access param)
+      :in (unless (or (has-value? inputs variable) (has-value? uniforms variable))
+        (errorf "main reads from a free variable %s which is not declared as an input or uniform. Did you forget to set a dynamic variable?" (variable/name variable)))
+      :out (unless (has-value? outputs variable)
+        (errorf "main writes to free variable %s which is not declared as an output" (variable/name variable)))
+      :inout (errorf "main contains a free variable %s which is read and written to" (variable/name variable))
+      x (errorf "BUG: illegal access type %q" x)))
+  program)
+
+(defmodule program
+  (defmacro new [& body]
+    (def $uniforms (gensym))
+    (def $inputs (gensym))
+    (def $outputs (gensym))
+
+    (var defined-main? false)
+
+    (def <statements>
+      (seq [form :in body]
+        (pat/match form
+          ['defn _ 'main &] (set defined-main? true)
+          nil)
+        (pat/match form
+          ['uniform type name] ~(array/push ,$uniforms (def ,name (,variable/new ,(string name) ,(type/of-ast type))))
+          ['in type name] ~(array/push ,$inputs (def ,name (,variable/new ,(string name) ,(type/of-ast type))))
+          ['out type name] ~(array/push ,$outputs (def ,name (,variable/new ,(string name) ,(type/of-ast type))))
+          ['defn & args] ~(as-macro ,jlsl/defn ,;args)
+          ['declare & args] ~(as-macro ,jlsl/declare ,;args)
+          ['implement & args] ~(as-macro ,jlsl/implement ,;args)
+          ['unquote & args] args
+          (errorf "unknown top-level form %q" form))))
+    (unless defined-main?
+      (error "program with no main function"))
+    ~(do
+      (def ,$uniforms @[])
+      (def ,$inputs @[])
+      (def ,$outputs @[])
+      ,;<statements>
+      (,validate-program
+        {:uniforms ,$uniforms
+         :inputs ,$inputs
+         :outputs ,$outputs
+         :main (,resolve-function main [])}))
+    ))
+
+(defmacro declare [thing]
+  # TODO: allocate a decent name for this uniform??
+  (with-syms [$var]
+    ~(fn [,$var] [',thing (,type/to-glsl (,variable/type ,$var)) (,allocate-identifier ,$var)])))
+
+(defn render/program [{:uniforms uniforms :inputs inputs :outputs outputs :main main}]
+  (def global-scope (bimap/new))
+  (def root-variables (array/concat uniforms inputs outputs))
+  (with-dyns [*identifier-map* (new-scope)]
+    [;(map (declare in) inputs)
+     ;(map (declare out) outputs)
+     ;(map (declare uniform) uniforms)
+     ;(render/function main root-variables)
+    ]))
+
+(test-macro (program/new
+  (uniform :float t)
+  (defn :void main []
+    (return 10)))
+  (do
+    (def <1> @[])
+    (def <2> @[])
+    (def <3> @[])
+    (array/push <1> (def t (@new "t" (@type/primitive (quote (<4> float))))))
+    (as-macro @jlsl/defn :void main [] (return 10))
+    (@validate-program {:inputs <2> :main (@resolve-function main []) :outputs <3> :uniforms <1>})))
+
+(deftest "various sorts of illegal programs"
+  (test-error (program/new
+    (defn :void main [:float x]
+      (return 10)))
+    "main: no overload for arguments []")
+  (test-error (macex '(program/new))
+    "program with no main function")
+  (test-error (program/new
+    (defn :float main []
+      (return 10)))
+    "main must return void")
+  (def free (variable/new "foo" type/float))
+  (test-error (program/new
+    (defn :void main []
+      (return free)))
+    "main reads from a free variable foo which is not declared as an input or uniform. Did you forget to set a dynamic variable?")
+
+  (test-error (program/new
+    (out :float x)
+    (defn :void main []
+      (return x)))
+    "main reads from a free variable x which is not declared as an input or uniform. Did you forget to set a dynamic variable?")
+
+  (test-error (program/new
+    (uniform :float x)
+    (defn :void main []
+      (+= x 10)
+      (return x)))
+    "main contains a free variable x which is read and written to")
+
+  (test-error (program/new
+    (uniform :float x)
+    (defn :void main []
+      (set x 10)
+      (return 1)))
+    "main writes to free variable x which is not declared as an output")
+
+  (test-error (program/new
+    (in :float x)
+    (defn :void main []
+      (+= x 10)
+      (return x)))
+    "main contains a free variable x which is read and written to")
+
+  (test-error (program/new
+    (in :float x)
+    (defn :void main []
+      (set x 10)
+      (return 1)))
+    "main writes to free variable x which is not declared as an output")
+
+  )
+
+(test (render/program (program/new
+  (uniform :float t)
+  (defn :void main []
+    (return 10))))
+  [[uniform :float t]
+   [defn :void main [] [return 10]]])
+
 (defmacro*- test-function [expr & results]
   ~(test-stdout (,prin (,glsl/render-program (,render/function ,expr))) ,;results))
+
+(defmacro*- test-program [expr & results]
+  ~(test-stdout (,prin (,glsl/render-program (,render/program ,(call program/new ;expr)))) ,;results))
+
+(deftest "trivial program"
+  (test-program [
+    (uniform :float t)
+    (defn :void main []
+      (return 10))
+    ] `
+    uniform float t;
+    
+    void main() {
+      return 10.0;
+    }
+  `))
+
+(deftest "you can reference uniforms or input/output variables in main without them counting as free variables"
+  (test-program [
+    (uniform :float t)
+    (defn :void main []
+      (return t))
+    ] `
+    uniform float t;
+    
+    void main() {
+      return t;
+    }
+  `))
+
+(deftest "uniforms are forwarded as normal free variables to calling functions"
+  (test-program [
+    (uniform :float t)
+    (defn :void foo [:float x]
+      (return (+ x t)))
+    (defn :void main []
+      (return (foo 10)))
+    ] `
+    uniform float t;
+    
+    void foo(float x, float t) {
+      return x + t;
+    }
+    
+    void main() {
+      return foo(10.0, t);
+    }
+  `))
+
+(deftest "with can be used to shadow uniforms"
+  (test-program [
+    (uniform :float t)
+    (defn :void foo [:float x]
+      (return (+ x t)))
+    (defn :void main []
+      (with [t 100]
+        (return (foo 10))
+        ))
+    ] `
+    uniform float t;
+    
+    void foo(float x, float t) {
+      return x + t;
+    }
+    
+    void main() {
+      {
+        float t1 = 100.0;
+        return foo(10.0, t1);
+      }
+    }
+  `))
+
+(deftest "setting uniforms or inputs is disallowed even across function calls"
+  (test-error (program/new
+    (uniform :float t)
+    (defn :void foo [:float x]
+      (set t 10)
+      (return x))
+    (defn :void main []
+      (return (foo 10))))
+    "main writes to free variable t which is not declared as an output"))
+
+# TODO: I think that maybe we should just disallow setting dynamic variables altogether
+(deftest "you can set uniforms if you've shadowed them using with"
+  (test-program [
+    (uniform :float t)
+    (defn :void foo [:float x]
+      (set t 10)
+      (return x))
+    (defn :void main []
+      (with [t 100]
+        (return (foo 10))
+        ))
+    ] `
+    uniform float t;
+    
+    void foo(float x, out float t) {
+      t = 10.0;
+      return x;
+    }
+    
+    void main() {
+      {
+        float t1 = 100.0;
+        return foo(10.0, t1);
+      }
+    }
+  `))
+
+(deftest "uniforms with the same name get unique lexical identifiers"
+  (test-program [
+    (uniform :float t)
+    (defn :float foo [:float x]
+      (return (+ x t)))
+    (uniform :float t)
+    (defn :void main []
+      (return (+ t (foo 10))))
+    ] `
+    uniform float t;
+    uniform float t1;
+    
+    float foo(float x, float t) {
+      return x + t;
+    }
+    
+    void main() {
+      return t1 + foo(10.0, t);
+    }
+  `))
 
 (test (render/function (jlsl/defn :float incr [:float x]
   (return (+ x 1))))
@@ -558,6 +855,7 @@
       (return (equal [0 0 0] [1 2 3]))
       (return (not-equal [0 0 0] [1 2 3]))
       (return (< [0 0 0] [1 2 3]))
+      (return (+ 1 [0 0 0]))
       (return (< 1 2))) `
     float foo() {
       return vec3(0.0, 0.0, 0.0) == vec3(1.0, 2.0, 3.0);
@@ -565,6 +863,7 @@
       return equal(vec3(0.0, 0.0, 0.0), vec3(1.0, 2.0, 3.0));
       return notEqual(vec3(0.0, 0.0, 0.0), vec3(1.0, 2.0, 3.0));
       return lessThan(vec3(0.0, 0.0, 0.0), vec3(1.0, 2.0, 3.0));
+      return 1.0 + vec3(0.0, 0.0, 0.0);
       return 1.0 < 2.0;
     }
   `)

@@ -1,6 +1,11 @@
 (use judge)
+(import pat)
 (use ./util)
 (use ./types)
+
+(defn- on-same-type-error [name arg-types]
+  |(errorf "%s: arguments must have the same base type, got %q"
+    name (tmap type/to-glsl arg-types)))
 
 (def builtins @{})
 
@@ -27,10 +32,18 @@
 (defn- builtin [name type arg-types]
   (function/builtin name type (map param-sig/in arg-types)))
 
+(defn- get-more-or-less-unique [f ind on-error]
+  (pat/match (sort (distinct (map f ind)))
+    [unique] unique
+    [1 unique] unique
+    (on-error)))
+
 (defn- resolve-very-generic [f arity name arg-types]
   (check-arity name arity arg-types)
-  (def base-type (get-unique type/base-type arg-types))
-  (def components (get-unique type/components arg-types))
+  (def base-type (get-unique type/base-type arg-types (on-same-type-error name arg-types)))
+  (def components (get-more-or-less-unique type/components arg-types
+    |(errorf "%s: cannot mix argument lengths, got %q"
+      name (tmap type/to-glsl arg-types))))
   (def what-do (f base-type components))
   (def [name type] (if (type? what-do) [name what-do] what-do))
   (builtin name type arg-types))
@@ -89,7 +102,7 @@
 
 (defn resolve-vec-constructor [name arg-types]
   (check-arity name -1 arg-types)
-  (def base-type (get-unique type/base-type arg-types))
+  (def base-type (get-unique type/base-type arg-types (on-same-type-error name arg-types)))
   (def components (sum (map type/components arg-types)))
   (unless (>= components 2)
     (error "vector constructor needs at least two components"))

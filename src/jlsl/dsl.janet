@@ -3,7 +3,7 @@
 (use ./types)
 (use ./expr)
 
-(defmacro jlsl/stub [return-type name param-sigs]
+(defmacro- jlsl/stub [return-type name param-sigs]
   ~(,multifunction/single ,name ,(type/of-ast return-type) [,;(map param-sig/of-ast param-sigs)]))
 
 # declare returns a multifunction
@@ -38,7 +38,7 @@
 (defmacro jlsl/fn [return-type name params & body]
   (call jlsl/implement return-type (call jlsl/stub return-type name (map 0 (partition 2 params))) params ;body))
 
-# defn returns a single function
+# defn defines a multifunction but returns a single function
 (defmacro jlsl/defn [return-type name params & body]
   ['upscope
     (call jlsl/declare return-type name (map 0 (partition 2 params)))

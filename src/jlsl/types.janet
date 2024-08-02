@@ -466,6 +466,7 @@
   (defn implicit-params [t]
     (def {:implicit-params-ref implicit-params-ref} t)
     (ref/get-or-put implicit-params-ref
+      # TODO: this is not a very good sort because variables have a gensym'd component
       (sort (seq [[variable [read? write?]] :pairs (free-var-accesses t)]
         (param/new variable (param-sig/new (variable/type variable) (cond
           (and read? write?) :inout
