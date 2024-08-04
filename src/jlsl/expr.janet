@@ -5,33 +5,11 @@
 (use ./types)
 (use ./builtins)
 
-(defn resolve-function [function-or-multifunction arg-types]
-  (assertf (tuple? arg-types) "arg-types must be a tuple, got %q" arg-types)
-  (if (multifunction? function-or-multifunction)
-    (multifunction/resolve function-or-multifunction arg-types)
-    (do
-      (assertf (function? function-or-multifunction)
-        "%q is not a function" function-or-multifunction)
-      function-or-multifunction)))
-
-(defn resolve-impl [t arg-types]
-  (function/match (resolve-function t arg-types)
-    (custom impl) impl
-    (builtin name _ _) (errorf "cannot implement builtin %s" name)))
-
 (defmodule expr
-  (defn type [t]
-    (expr/match t
-      (literal type _) type
-      (identifier variable) (variable/type variable)
-      (call function _) (function/return-type function)
-      (dot expr field) (type/field-type (type expr) field)
-      (in expr _) (type/element-type (type expr))
-      (crement _ expr) (type expr)))
-
   (defn- call [general-function args]
-    (expr/call (resolve-function general-function (tmap type args)) args))
+    (expr/call (multifunction/resolve-function general-function (tmap expr/type args)) args))
 
+  # TODO: get rid of this
   (defn- parse-callable [ast]
     (or (if-let [f (in builtins ast)] ~',f ast)))
 

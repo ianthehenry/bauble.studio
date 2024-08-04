@@ -191,7 +191,7 @@
         {:uniforms ,$uniforms
          :inputs ,$inputs
          :outputs ,$outputs
-         :main (,resolve-function main [])}))
+         :main (,multifunction/resolve-function main [])}))
     ))
 
 (defmacro declare [thing]

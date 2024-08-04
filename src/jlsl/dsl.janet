@@ -32,7 +32,7 @@
     (def ,$params [,;<params>])
     (def ,$body @[])
     ,;<body>
-    (,function/custom (,impl/implement (,resolve-impl ,name (,tmap ,param/type ,$params)) ,$return-type ,$params ,$body))))
+    (,function/custom (,impl/implement (,multifunction/resolve-impl ,name (,tmap ,param/type ,$params)) ,$return-type ,$params ,$body))))
 
 # fn returns a single function
 (defmacro jlsl/fn [return-type name params & body]
@@ -73,7 +73,7 @@
       (def <3> (quote (<1> void)))
       (def <4> [(upscope (def <5> (@new (@type/primitive (quote (<2> float))) :in)) (def x (@new "x" (@type <5>))) (@new x <5>)) (upscope (def <6> (@new (@type/primitive (quote (<2> float))) :in)) (def y (@new "y" (@type <6>))) (@new y <6>))])
       (def <7> @[])
-      (@array/push <7> (upscope (def <8> (@expr/literal (quote (<1> primitive (<2> float))) 1)) (def <9> (@type <8>)) (def x (@new "x" <9>)) (@statement/declaration false x <8>)))
+      (@array/push <7> (upscope (def <8> (@expr/literal (quote (<1> primitive (<2> float))) 1)) (def <9> (@expr/type <8>)) (def x (@new "x" <9>)) (@statement/declaration false x <8>)))
       (@array/push <7> (@statement/return (@call (quote @{:name "vec" :overloads "<function 0x1>"}) @[(@expr/identifier x) (@expr/literal (quote (<1> primitive (<2> float))) 2) (@expr/literal (quote (<1> primitive (<2> float))) 3)])))
       (@function/custom (@implement (@resolve-impl foo (@tmap @type <4>)) <3> <4> <7>)))))
 
@@ -278,3 +278,28 @@
                 [<4> primitive [<5> float]]]
                [[<4> primitive [<5> float]] :in]]]
     :scan-ref @[[<11> unscanned]]}])
+
+(deftest "defn declares a janet function that returns an expr"
+  (jlsl/defn :float foo []
+    (return 1))
+  (test foo "<function 0x1>")
+  (test (foo)
+    [<1>
+     call
+     [<2>
+      custom
+      {:body @[[<3>
+                return
+                [<1>
+                 literal
+                 [<4> primitive [<5> float]]
+                 1]]]
+       :declared-param-sigs []
+       :declared-return-type [<4> primitive [<5> float]]
+       :free-var-access-ref @[]
+       :implicit-params-ref @[]
+       :name "foo"
+       :params @[]
+       :scan-ref @[[<6> unscanned]]}]
+     @[]])
+  )
