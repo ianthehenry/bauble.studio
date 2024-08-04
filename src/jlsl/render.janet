@@ -7,8 +7,7 @@
 (use ./types)
 (use ./dsl)
 
-# TODO: this should be private, but there is no defdyn-
-(defdyn *identifier-map*)
+(def- *identifier-map* (gensym))
 
 (defn resolve-identifier [variable] # and *identifier-map*
   (or (bimap/in (dyn *identifier-map*) variable)
@@ -43,7 +42,7 @@
 (defn new-scope [] (bimap/new))
 
 (defmacro- subscope [& exprs]
-  ~(with-dyns [,*identifier-map* (,inherit-scope)]
+  ~(with-dyns [',*identifier-map* (,inherit-scope)]
     ,;exprs))
 
 (defn- render/statement [t] # and *identifier-map*
