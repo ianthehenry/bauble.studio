@@ -128,21 +128,9 @@ That will produce code like this:
 
 # builtin function name resolution
 
-So there's this slighty awkward thing where some names like `+` and `length` are both Janet and GLSL functions. But we don't want to shadow Janet's built-in `length` with a GLSL alternative, so when Janet resolves function identifiers, it first checks if it's the name of a builtin, and only if it's not will JLSL look for an identifier with that name in scope. So, for example:
+So there's this slighty awkward thing where some names like `+` and `length` are both Janet and GLSL functions. We shadow these functions with functions that first check their arguments to see if you're calling them with any jlsl expressions. If so, the result is an expression. Otherwise/
 
-```
-(defn :float length [:vec3 v]
-  (return (pow (sum (pow v 3)) (/ 3))))
-
-(defn :float foo []
-  (return (length [1 2 3])))
-```
-
-Even though the Janet identifier `length` is bound to a JLSL function in this case, the identifier resolution process resolves the symbol `length` to the GLSL builtin and doesn't even look at the lexical binding of the `length` identifier.
-
-The only workaround here is to pick a different name for the custom function.
-
-(It would be *possible* to make an identifier that can behave as both a native Janet callable and a GLSL function by defining an abstract type, but that would require a native Janet module, and `jlsl` wants to remain in pure Janet.)
+So for example, `(+ 1 2)` will return `3`, but `(+ 1 p)` will return an expression.
 
 # future work
 

@@ -3,15 +3,11 @@
 (import pat)
 (use ./util)
 (use ./types)
-(use ./builtins)
+(import ./builtins)
 
 (defmodule expr
   (defn- call [general-function args]
     (expr/call (multifunction/resolve-function general-function (tmap expr/type args)) args))
-
-  # TODO: get rid of this
-  (defn- parse-callable [ast]
-    (or (if-let [f (in builtins ast)] ~',f ast)))
 
   (defn of-ast [expr-ast]
     (pat/match expr-ast
@@ -19,13 +15,13 @@
       |boolean? [expr/literal ['quote type/bool] expr-ast]
       |number? [expr/literal ['quote type/float] expr-ast]
       |symbol? [expr/identifier expr-ast]
-      |btuple? [call ~',(in builtins 'vec) (map of-ast expr-ast)]
+      |btuple? [call ~',builtins/vec (map of-ast expr-ast)]
       ['. expr field] [expr/dot (of-ast expr) ['quote field]]
       ['in expr index] [expr/in (of-ast expr) (of-ast index)]
       [(and op (or '++ '-- '_++ '_--)) expr] [expr/crement ['quote op] (of-ast expr)]
       # TODO
       # ['if cond then else]
-      [f & args] [call (parse-callable f) (map of-ast args)]
+      [f & args] [call f (map of-ast args)]
       )))
 
 (defmodule statement

@@ -18,6 +18,58 @@
   (array type length)
   (struct name fields))
 
+(defadt variable
+  (dynamic id name type)
+  (lexical id name type))
+
+(defmodule variable
+  (defn new [name type] (variable/lexical (gensym) name type))
+  (defn dyn [name type] (variable/dynamic (gensym) name type))
+
+  (defn name [t]
+    (variable/match t
+      (dynamic _ name _) name
+      (lexical _ name _) name))
+
+  (defn type [t]
+    (variable/match t
+      (dynamic _ _ type) type
+      (lexical _ _ type) type)))
+
+(defadt free-vars
+  (unscanned)
+  (unresolved free-variables function-references)
+  (resolved free-variables))
+
+(defadt function
+  (builtin name return-type param-sigs)
+  (custom impl))
+
+(defadt expr
+  (literal type value)
+  (identifier variable)
+  (call function args)
+  (crement op value)
+  (dot expr field)
+  (in expr index))
+
+(defadt statement
+  (declaration const? variable expr)
+  (assign l-value r-value)
+  (update op l-value r-value)
+  (break)
+  (continue)
+  (discard)
+  (return expr)
+  (do body)
+  (with bindings body)
+  (if cond then else)
+  (case value cases)
+  (while cond body)
+  (do-while cond body)
+  (for init cond update body)
+  (expr expr))
+
 (defmodule primitive-type
   (def short-names
     {:float (primitive-type/float)
@@ -166,4 +218,28 @@
       (array type _) type
       (vec t _) (type/primitive t)
       (struct name fields) (error "cannot index into struct")))
+  )
+
+(defmodule param-sig
+  (defn new [type access] [type access])
+  (defn type [t] (in t 0))
+  (defn access [t] (in t 1))
+  (defn in [type] (new type :in))
+
+  (defn to-glsl [t]
+    (def type (type/to-glsl (type t)))
+    (match (access t)
+      :in type
+      :out (tuple/brackets 'out type)
+      :inout (tuple/brackets 'inout type)
+      (error "BUG: unknown access type")))
+
+  (defn of-ast [ast]
+    (if (btuple? ast)
+      (match ast
+        ['in type] [new (type/of-ast type) :in]
+        ['out type] [new (type/of-ast type) :out]
+        ['inout type] [new (type/of-ast type) :inout]
+        (errorf "unknown parameter signature %q" ast))
+      [new (type/of-ast ast) :in]))
   )

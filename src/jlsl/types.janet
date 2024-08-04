@@ -5,47 +5,12 @@
 (import ./type :prefix "" :export true)
 (import pat)
 
-(defadt variable
-  (dynamic id name type)
-  (lexical id name type))
-
-(defmodule variable
-  (defn new [name type] (variable/lexical (gensym) name type))
-  (defn dyn [name type] (variable/dynamic (gensym) name type))
-
-  (defn name [t]
-    (variable/match t
-      (dynamic _ name _) name
-      (lexical _ name _) name))
-
-  (defn type [t]
-    (variable/match t
-      (dynamic _ _ type) type
-      (lexical _ _ type) type)))
-
-(defadt free-vars
-  (unscanned)
-  (unresolved free-variables function-references)
-  (resolved free-variables))
-
-(defadt function
-  (builtin name return-type param-sigs)
-  (custom impl))
-
 (defn impl/return-type [{:declared-return-type declared-return-type}] declared-return-type)
 
 (defn function/return-type [t]
   (function/match t
     (builtin _ return-type _) return-type
     (custom impl) (impl/return-type impl)))
-
-(defadt expr
-  (literal type value)
-  (identifier variable)
-  (call function args)
-  (crement op value)
-  (dot expr field)
-  (in expr index))
 
 (defn expr/type [t]
   (expr/match t
@@ -55,47 +20,6 @@
     (dot expr field) (type/field-type (expr/type expr) field)
     (in expr _) (type/element-type (expr/type expr))
     (crement _ expr) (expr/type expr)))
-
-(defadt statement
-  (declaration const? variable expr)
-  (assign l-value r-value)
-  (update op l-value r-value)
-  (break)
-  (continue)
-  (discard)
-  (return expr)
-  (do body)
-  (with bindings body)
-  (if cond then else)
-  (case value cases)
-  (while cond body)
-  (do-while cond body)
-  (for init cond update body)
-  (expr expr))
-
-(defmodule param-sig
-  (defn new [type access] [type access])
-  (defn type [t] (in t 0))
-  (defn access [t] (in t 1))
-  (defn in [type] (new type :in))
-
-  (defn to-glsl [t]
-    (def type (type/to-glsl (type t)))
-    (match (access t)
-      :in type
-      :out (tuple/brackets 'out type)
-      :inout (tuple/brackets 'inout type)
-      (error "BUG: unknown access type")))
-
-  (defn of-ast [ast]
-    (if (btuple? ast)
-      (match ast
-        ['in type] [new (type/of-ast type) :in]
-        ['out type] [new (type/of-ast type) :out]
-        ['inout type] [new (type/of-ast type) :inout]
-        (errorf "unknown parameter signature %q" ast))
-      [new (type/of-ast ast) :in]))
-  )
 
 (defmodule param
   (defn new [lexical-variable sig]
@@ -324,12 +248,6 @@
           (error "BUG: free variable not actually used"))))))))
   )
 
-(defn coerce-expr [expr]
-  (if (expr? expr)
-    expr
-    # TODO: convert floats and tuples and variables and such into vectors
-    (error "UNIMPLEMENTED")))
-
 (def- multifunction-proto @{:type 'function})
 (defn multifunction? [t] (and (table? t) (= (table/getproto t) multifunction-proto)))
 (defmodule multifunction
@@ -350,7 +268,11 @@
     (if (multifunction? t)
       t
       (or (in multifunction-registry t)
-        (errorf "Attempt to call something that does not appear to be a function: %q" t))))
+        (errorf "Cannot coerce %q to a multifunction" t))))
+
+  (defn register-wrapper [wrapper multifunction]
+    (put multifunction-registry wrapper (resolve-multifunction multifunction))
+    wrapper)
 
   # t can be a jlsl function, a jlsl multifunction, or a janet function with an
   # entry in the multifunction registry. It returns a function
@@ -364,26 +286,40 @@
       (custom impl) impl
       (builtin name _ _) (errorf "cannot implement builtin %s" name)))
 
-  # TODO: so this unconditionally does the thing. But we also want
-  # a way to conditionally do the thing.
+  (import ./builtins-prelude)
+  (defn- coerce-expr [value]
+    (if (expr? value)
+      value
+      # TODO: convert floats and tuples and variables and such into vectors
+      (pat/match value
+        |keyword? (expr/literal type/int value)
+        |boolean? (expr/literal type/bool value)
+        |number? (expr/literal type/float value)
+        |variable? (expr/identifier value)
+        |tuple? (let [args (map coerce-expr value)]
+          (expr/call (builtins-prelude/resolve-vec-constructor "[]" (tmap expr/type args)) args))
+        # TODO:
+        #['. expr field] [expr/dot (of-ast expr) ['quote field]]
+        (errorf "Can't coerce %q into an expression" value)
+        )))
+
   (defn- wrapper-function [multifunction]
     (def wrapper (fn [& args]
       (def args (map coerce-expr args))
       (expr/call
         (resolve-function multifunction (tmap expr/type args))
         args)))
-    (put multifunction-registry wrapper multifunction)
-    wrapper)
+    (register-wrapper wrapper multifunction))
 
   (defn new [name overloads]
-    (table/setproto @{:name name :overloads overloads} multifunction-proto))
+    (wrapper-function
+      (table/setproto @{:name name :overloads overloads} multifunction-proto)))
 
   (defn single [name return-type param-sigs]
-    (wrapper-function
-      (new name
-        {(tmap param-sig/type param-sigs)
-          (function/custom
-            (impl/new name return-type param-sigs))})))
+    (new name
+      {(tmap param-sig/type param-sigs)
+        (function/custom
+          (impl/new name return-type param-sigs))}))
 
   (defn param-sigs [t arg-types]
     (impl/param-sigs (resolve-overload t arg-types)))

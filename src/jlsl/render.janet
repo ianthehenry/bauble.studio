@@ -208,6 +208,9 @@
      ;(render/function main root-variables)
     ]))
 
+(use ./builtins)
+(use ./flexins)
+
 (test-macro (program/new
   (uniform :float t)
   (defn :void main []

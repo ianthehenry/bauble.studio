@@ -44,6 +44,9 @@
     (call jlsl/declare return-type name (map 0 (partition 2 params)))
     (call jlsl/implement return-type name params ;body)])
 
+(use ./builtins)
+(use ./flexins)
+
 (test-macro (jlsl/declare :float incr [:float])
   (def incr (@single "incr" (@type/primitive (quote (<1> float))) [(@new (@type/primitive (quote (<1> float))) :in)])))
 
@@ -74,7 +77,7 @@
       (def <4> [(upscope (def <5> (@new (@type/primitive (quote (<2> float))) :in)) (def x (@new "x" (@type <5>))) (@new x <5>)) (upscope (def <6> (@new (@type/primitive (quote (<2> float))) :in)) (def y (@new "y" (@type <6>))) (@new y <6>))])
       (def <7> @[])
       (@array/push <7> (upscope (def <8> (@expr/literal (quote (<1> primitive (<2> float))) 1)) (def <9> (@expr/type <8>)) (def x (@new "x" <9>)) (@statement/declaration false x <8>)))
-      (@array/push <7> (@statement/return (@call (quote @{:name "vec" :overloads "<function 0x1>"}) @[(@expr/identifier x) (@expr/literal (quote (<1> primitive (<2> float))) 2) (@expr/literal (quote (<1> primitive (<2> float))) 3)])))
+      (@array/push <7> (@statement/return (@call (quote "<function 0x1>") @[(@expr/identifier x) (@expr/literal (quote (<1> primitive (<2> float))) 2) (@expr/literal (quote (<1> primitive (<2> float))) 3)])))
       (@function/custom (@implement (@resolve-impl foo (@tmap @type <4>)) <3> <4> <7>)))))
 
 (test (jlsl/defn :void foo [:float x :float y]
