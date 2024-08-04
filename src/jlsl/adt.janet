@@ -73,7 +73,7 @@
 
     (with-syms [$value]
       ~(let [,$value ,value]
-        (,assertf (and (tuple? ,$value) (= (first ,$value) ',unique-type-tag)) "%q is not a %s" ,$value ',name)
+        (,assertf (as-macro ,and (,tuple? ,$value) (,= (,first ,$value) ',unique-type-tag)) "%q is not a %s" ,$value ',name)
         (as-macro ,pat/match ,$value
           ,;pat-branches))))
 
@@ -83,7 +83,7 @@
   (with-syms [$value $branches]
     ~(upscope
       (,$defn ,(symbol name "?") [value]
-        (and (tuple? value) (= (first value) ',unique-type-tag)))
+        (as-macro ,and (,tuple? value) (,= (,first value) ',unique-type-tag)))
       (,$defmacro ,(symbol prefix "match") [value & branches]
         (,match-macro value branches))
       ,;(catseq [[constructor args] :pairs cases]
@@ -101,7 +101,7 @@
   (upscope
     (defn result?
       [value]
-      (and (tuple? value) (= (first value) (quote <1>))))
+      (as-macro @and (@tuple? value) (@= (@first value) (quote <1>))))
     (defmacro result/match
       [value & branches]
       (@match-macro value branches))
