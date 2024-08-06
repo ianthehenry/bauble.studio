@@ -4,6 +4,7 @@
 (use ./type)
 (use ./expr)
 (import ./builtins)
+(use ./builtin-test-helpers)
 
 # "flexins" are functions that *either* behave as builtins, if
 # invoked with expression arguments, or behave as regular Janet
@@ -30,61 +31,15 @@
 (defflex not=)
 # TODO: the CPU version of this should be a different thing
 (defflex length)
+(defflex sin math/sin)
+(defflex cos math/cos)
 
+(defn- float [x] (expr/literal type/float x))
+
+(test (sin 0) 0)
+(typecheck (sin (float 0)) [:float -> :float])
 (test (+ 1 2) 3)
-(test (+ (expr/literal type/float 1) 2)
-  [<1>
-   call
-   [<2>
-    builtin
-    "+"
-    [<3> primitive [<4> float]]
-    @[[[<3> primitive [<4> float]] :in]
-      [[<3> primitive [<4> float]] :in]]]
-   @[[<1>
-      literal
-      [<3> primitive [<4> float]]
-      1]
-     [<1>
-      literal
-      [<3> primitive [<4> float]]
-      2]]])
+(typecheck (+ (float 1) 2) [:float :float -> :float])
 
 (def- foo (variable/new "name" type/vec2))
-(test (+ (expr/literal type/float 1) [1 foo 3])
-  [<1>
-   call
-   [<2>
-    builtin
-    "+"
-    [<3> vec [<4> float] 4]
-    @[[[<3> primitive [<4> float]] :in]
-      [[<3> vec [<4> float] 4] :in]]]
-   @[[<1>
-      literal
-      [<3> primitive [<4> float]]
-      1]
-     [<1>
-      call
-      [<2>
-       builtin
-       "vec4"
-       [<3> vec [<4> float] 4]
-       @[[[<3> primitive [<4> float]] :in]
-         [[<3> vec [<4> float] 2] :in]
-         [[<3> primitive [<4> float]] :in]]]
-      @[[<1>
-         literal
-         [<3> primitive [<4> float]]
-         1]
-        [<1>
-         identifier
-         [<5>
-          lexical
-          <6>
-          "name"
-          [<3> vec [<4> float] 2]]]
-        [<1>
-         literal
-         [<3> primitive [<4> float]]
-         3]]]]])
+(typecheck (+ (float 1) [1 foo 3]) [:float :vec4 -> :vec4])

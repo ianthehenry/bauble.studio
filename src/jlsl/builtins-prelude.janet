@@ -77,16 +77,33 @@
   (const type/bool)
   2))
 
-(defn resolve-vec-constructor [name arg-types]
+(defn resolve-vec-constructor [expected-components name arg-types]
   (check-arity name -1 arg-types)
   (def base-type (get-unique type/base-type arg-types (on-same-type-error name arg-types)))
   (def components (sum (map type/components arg-types)))
-  (unless (>= components 2)
-    (error "vector constructor needs at least two components"))
-  (unless (<= components 4)
-    (error "vector constructor cannot have more than four components"))
+  (if (nil? expected-components) (do
+    (unless (>= components 2)
+      (error "vector constructor needs at least two components"))
+    (unless (<= components 4)
+      (error "vector constructor cannot have more than four components")))
+    (unless (= components expected-components)
+      (errorf "%s expects %d components, got %d" name expected-components components)))
   (def constructor (primitive-type/vec-prefix base-type))
   (builtin
     (string constructor components)
     (type/vec base-type components)
+    arg-types))
+
+(defn resolve-matrix-constructor [cols rows name arg-types]
+  (check-arity name -1 arg-types)
+  (def base-type (get-unique type/base-type arg-types (on-same-type-error name arg-types)))
+  (unless (= base-type (primitive-type/float))
+    (error "matrices must contain floats"))
+  (def components (sum (map type/components arg-types)))
+  (def expected-components (* rows cols))
+  (unless (= components expected-components)
+    (errorf "%s constructor needs %d components, but got %d" name expected-components))
+  (builtin
+    name
+    (type/mat cols rows)
     arg-types))

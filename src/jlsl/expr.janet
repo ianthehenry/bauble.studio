@@ -51,6 +51,7 @@
             (def ,$type (,expr/type ,$expr))
             (def ,name (,variable/new ,(string name) ,$type))
             (,statement/declaration ,const? ,name ,$expr)))
+      [(or 'def 'var) &] (errorf "illegal form %q" ast)
       ['set dest value] [statement/assign (expr/of-ast dest) (expr/of-ast value)]
       ['return value] [statement/return (expr/of-ast value)]
       ['break] [statement/break]

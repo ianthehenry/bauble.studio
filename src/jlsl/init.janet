@@ -1,2 +1,2 @@
-(use ./dsl)
-(use ./render)
+(import ./dsl :prefix "" :export true)
+(import ./render :prefix "" :export true)
