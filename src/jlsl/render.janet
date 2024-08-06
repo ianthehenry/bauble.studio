@@ -193,8 +193,7 @@
          :inputs ,$inputs
          :outputs ,$outputs
          :precisions ,$precisions
-         :main (,multifunction/resolve-function main [])}))
-    ))
+         :main (,multifunction/resolve-function main [])}))))
 
 (defmacro declare [thing]
   # TODO: allocate a decent name for this uniform??

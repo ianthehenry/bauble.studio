@@ -9,13 +9,13 @@
   (defn- call [general-function args]
     (expr/call (multifunction/resolve-function general-function (tmap expr/type args)) args))
 
-  (defn of-ast [expr-ast]
-    (pat/match expr-ast
-      |keyword? [expr/literal ['quote type/int] expr-ast]
-      |boolean? [expr/literal ['quote type/bool] expr-ast]
-      |number? [expr/literal ['quote type/float] expr-ast]
-      |symbol? [expr/identifier expr-ast]
-      |btuple? [call ~',builtins/vec (map of-ast expr-ast)]
+  (defn of-ast [ast]
+    (pat/match ast
+      |keyword? [expr/literal ['quote type/int] ast]
+      |boolean? [expr/literal ['quote type/bool] ast]
+      |number? [expr/literal ['quote type/float] ast]
+      |symbol? [expr/identifier ast]
+      |btuple? [call ~',builtins/vec (map of-ast ast)]
       ['. expr field] [expr/dot (of-ast expr) ['quote field]]
       ['in expr index] [expr/in (of-ast expr) (of-ast index)]
       [(and op (or '++ '-- '_++ '_--)) expr] [expr/crement ['quote op] (of-ast expr)]
@@ -66,7 +66,10 @@
         (tuple/brackets ;(seq [[variable expr] :in (partition 2 bindings)]
           (tuple/brackets variable (expr/of-ast expr))))
         (of-asts body)]
-      ['if cond then & else] [statement/if (expr/of-ast cond) (of-ast then) (if else (of-ast else))]
+      ['if cond then & else] (do
+        (assert (<= (length else) 1) "too many arguments to if")
+        (def else (get else 0))
+        [statement/if (expr/of-ast cond) (of-ast then) (if else (of-ast else))])
       ['case value & cases]
         [statement/case
           (expr/of-ast value)

@@ -85,52 +85,52 @@
   (return (+ x y z)))
   [<1>
    custom
-   {:body @[[<7>
+   {:body @[[<8>
              declaration
              false
              [<2>
               lexical
-              <8>
+              <9>
               "z"
               [<4> primitive [<5> float]]]
-             [<9>
+             [<10>
               literal
               [<4> primitive [<5> float]]
               1]]
-            [<7>
+            [<8>
              return
-             [<9>
+             [<10>
               call
               [<1>
                builtin
                "+"
                [<4> primitive [<5> float]]
-               @[[[<4> primitive [<5> float]] :in]
-                 [[<4> primitive [<5> float]] :in]
-                 [[<4> primitive [<5> float]] :in]]]
-              @[[<9>
+               @[[<6> [<4> primitive [<5> float]] :in]
+                 [<6> [<4> primitive [<5> float]] :in]
+                 [<6> [<4> primitive [<5> float]] :in]]]
+              @[[<10>
                  identifier
                  [<2>
                   lexical
                   <3>
                   "x"
                   [<4> primitive [<5> float]]]]
-                [<9>
+                [<10>
                  identifier
                  [<2>
                   lexical
-                  <6>
+                  <7>
                   "y"
                   [<4> primitive [<5> float]]]]
-                [<9>
+                [<10>
                  identifier
                  [<2>
                   lexical
-                  <8>
+                  <9>
                   "z"
                   [<4> primitive [<5> float]]]]]]]]
-    :declared-param-sigs [[[<4> primitive [<5> float]] :in]
-                          [[<4> primitive [<5> float]] :in]]
+    :declared-param-sigs [[<6> [<4> primitive [<5> float]] :in]
+                          [<6> [<4> primitive [<5> float]] :in]]
     :declared-return-type [<4> void]
     :free-var-access-ref @[]
     :implicit-params-ref @[]
@@ -140,14 +140,14 @@
                 <3>
                 "x"
                 [<4> primitive [<5> float]]]
-               [[<4> primitive [<5> float]] :in]]
+               [<6> [<4> primitive [<5> float]] :in]]
               [[<2>
                 lexical
-                <6>
+                <7>
                 "y"
                 [<4> primitive [<5> float]]]
-               [[<4> primitive [<5> float]] :in]]]
-    :scan-ref @[[<10> unscanned]]}])
+               [<6> [<4> primitive [<5> float]] :in]]]
+    :scan-ref @[[<11> unscanned]]}])
 
 (test (jlsl/defn :void foo [:float x :float y]
   (var z 0)
@@ -156,114 +156,114 @@
   (return (+ x y z)))
   [<1>
    custom
-   {:body @[[<7>
+   {:body @[[<8>
              declaration
              false
              [<2>
               lexical
-              <8>
+              <9>
               "z"
               [<4> primitive [<5> float]]]
-             [<9>
+             [<10>
               literal
               [<4> primitive [<5> float]]
               0]]
-            [<7>
+            [<8>
              for
-             [<7>
+             [<8>
               declaration
               false
               [<2>
                lexical
-               <10>
+               <11>
                "i"
                [<4> primitive [<5> float]]]
-              [<9>
+              [<10>
                literal
                [<4> primitive [<5> float]]
                0]]
-             [<9>
+             [<10>
               call
               [<1>
                builtin
                "<"
                [<4> primitive [<5> bool]]
-               @[[[<4> primitive [<5> float]] :in]
-                 [[<4> primitive [<5> float]] :in]]]
-              @[[<9>
+               @[[<6> [<4> primitive [<5> float]] :in]
+                 [<6> [<4> primitive [<5> float]] :in]]]
+              @[[<10>
                  identifier
                  [<2>
                   lexical
-                  <10>
+                  <11>
                   "i"
                   [<4> primitive [<5> float]]]]
-                [<9>
+                [<10>
                  literal
                  [<4> primitive [<5> float]]
                  10]]]
-             [<7>
+             [<8>
               expr
-              [<9>
+              [<10>
                crement
                ++
-               [<9>
+               [<10>
                 identifier
                 [<2>
                  lexical
-                 <10>
+                 <11>
                  "i"
                  [<4> primitive [<5> float]]]]]]
-             @[[<7>
+             @[[<8>
                 update
                 +=
-                [<9>
+                [<10>
                  identifier
                  [<2>
                   lexical
-                  <8>
+                  <9>
                   "z"
                   [<4> primitive [<5> float]]]]
-                [<9>
+                [<10>
                  identifier
                  [<2>
                   lexical
-                  <10>
+                  <11>
                   "i"
                   [<4> primitive [<5> float]]]]]]]
-            [<7>
+            [<8>
              return
-             [<9>
+             [<10>
               call
               [<1>
                builtin
                "+"
                [<4> primitive [<5> float]]
-               @[[[<4> primitive [<5> float]] :in]
-                 [[<4> primitive [<5> float]] :in]
-                 [[<4> primitive [<5> float]] :in]]]
-              @[[<9>
+               @[[<6> [<4> primitive [<5> float]] :in]
+                 [<6> [<4> primitive [<5> float]] :in]
+                 [<6> [<4> primitive [<5> float]] :in]]]
+              @[[<10>
                  identifier
                  [<2>
                   lexical
                   <3>
                   "x"
                   [<4> primitive [<5> float]]]]
-                [<9>
+                [<10>
                  identifier
                  [<2>
                   lexical
-                  <6>
+                  <7>
                   "y"
                   [<4> primitive [<5> float]]]]
-                [<9>
+                [<10>
                  identifier
                  [<2>
                   lexical
-                  <8>
+                  <9>
                   "z"
                   [<4> primitive [<5> float]]]]]]]]
-    :declared-param-sigs [[[<4> primitive [<5> float]] :in]
-                          [[<4> primitive [<5> float]] :in]]
+    :declared-param-sigs [[<6> [<4> primitive [<5> float]] :in]
+                          [<6> [<4> primitive [<5> float]] :in]]
     :declared-return-type [<4> void]
     :free-var-access-ref @[]
     :implicit-params-ref @[]
@@ -273,14 +273,14 @@
                 <3>
                 "x"
                 [<4> primitive [<5> float]]]
-               [[<4> primitive [<5> float]] :in]]
+               [<6> [<4> primitive [<5> float]] :in]]
               [[<2>
                 lexical
-                <6>
+                <7>
                 "y"
                 [<4> primitive [<5> float]]]
-               [[<4> primitive [<5> float]] :in]]]
-    :scan-ref @[[<11> unscanned]]}])
+               [<6> [<4> primitive [<5> float]] :in]]]
+    :scan-ref @[[<12> unscanned]]}])
 
 (deftest "defn declares a janet function that returns an expr"
   (jlsl/defn :float foo []

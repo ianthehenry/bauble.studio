@@ -21,7 +21,7 @@
       (errorf "%s needs %d arguments but you gave it %d" name arity actual))))
 
 (defn builtin [name type arg-types]
-  (function/builtin name type (map param-sig/in arg-types)))
+  (function/builtin name type (map |(if (param-sig? $) $ (param-sig/in $)) arg-types)))
 
 (defn get-more-or-less-unique [f ind on-error]
   (pat/match (sort (distinct (map f ind)))

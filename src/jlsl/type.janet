@@ -220,10 +220,13 @@
       (struct name fields) (error "cannot index into struct")))
   )
 
+(def param-sig-type-id (gensym))
+(defn param-sig? [t]
+  (and (tuple? t) (= (length t) 3) (= (in t 0) param-sig-type-id)))
 (defmodule param-sig
-  (defn new [type access] [type access])
-  (defn type [t] (in t 0))
-  (defn access [t] (in t 1))
+  (defn new [type access] [param-sig-type-id type access])
+  (defn type [t] (in t 1))
+  (defn access [t] (in t 2))
   (defn in [type] (new type :in))
 
   (defn to-glsl [t]
