@@ -10,11 +10,24 @@
     (vec prim _) (do (check-floaty-prim prim) (type/primitive prim))
     (errorf "%s: numeric vector required" name)))
 
+(defn- check-booly [name type]
+  (type/match type
+    (primitive prim) (check-bool-prim prim)
+    (vec prim _) (check-bool-prim prim)
+    (errorf "%s: bool or bvec required" name)))
+
 (defn- numeric-vector-to-number [arity name arg-types]
   (check-arity name arity arg-types)
   (def return-type (get-unique (partial get-floaty-vector-base-type name) arg-types |(errorf "%s: cannot mix vector types" name)))
   (get-unique type/components arg-types |(errorf "%s: cannot mix argument lengths" name))
   (builtin name return-type arg-types))
+
+(defn- resolve-not [name arg-types]
+  (check-arity name 1 arg-types)
+  (each arg-type arg-types
+    (check-booly name arg-type))
+  (def components (get-unique type/components arg-types |(errorf "%s: cannot mix argument lengths" name)))
+  (builtin name (vec-or-prim (primitive-type/bool) components) arg-types))
 
 (defn- just [types] (fn [name arg-types]
   (if-let [return-type (in types arg-types)]
@@ -40,6 +53,7 @@
 (defbinop - -1)
 (defbinop * -2)
 (defbinop / -1)
+(defbinop % 2)
 
 (defbuiltin < (resolve-comparison-op "lessThan"))
 (defbuiltin > (resolve-comparison-op "greaterThan"))
@@ -53,6 +67,12 @@
 (defbuiltin vec2 (partial resolve-vec-constructor 2))
 (defbuiltin vec3 (partial resolve-vec-constructor 3))
 (defbuiltin vec4 (partial resolve-vec-constructor 4))
+
+# this could be a lot more restrictive...
+(defbinop and -2)
+(defbinop or -2)
+(defbinop xor -2)
+(defbuiltin not resolve-not)
 
 (defbuiltin mat2 (partial resolve-matrix-constructor 2 2))
 (defbuiltin mat2x2 (partial resolve-matrix-constructor 2 2))
@@ -110,8 +130,8 @@
 (defbuiltin fract (partial resolve-generic 1))
 (defbuiltin mod (partial resolve-generic 2))
 # TODO: modf? maybe?
-(defbuiltin min (partial resolve-generic 1))
-(defbuiltin max (partial resolve-generic 1))
+(defbuiltin min (partial resolve-generic 2))
+(defbuiltin max (partial resolve-generic 2))
 (defbuiltin clamp (partial resolve-generic 3))
 # TODO: mix also supports an interesitng boolean selection overload
 (defbuiltin mix (partial resolve-generic 3))
@@ -119,9 +139,17 @@
 (defbuiltin smoothstep (partial resolve-generic 3))
 (defbuiltin fma (partial resolve-generic 3))
 
+(test-error (and true) "and needs at least 2 arguments but you gave it 1")
+(typecheck (and true false) [:bool :bool -> :bool])
+# TODO: glsl actually doesn't support this overload
+(typecheck (and true false true) [:bool :bool :bool -> :bool])
+(typecheck (not true) [:bool -> :bool])
+(typecheck (not [true false]) [:bvec2 -> :bvec2])
+
 (test-error (sin [1]) "vector constructor needs at least two components")
 (typecheck (+ 10 20 [1 2]) [:float :float :vec2 -> :vec2])
 (typecheck (< [1 2] [3 4]) [:vec2 :vec2 -> :bvec2])
+(typecheck (< :1 :2) [:int :int -> :bool])
 (typecheck (< 1 2) [:float :float -> :bool])
 (typecheck (sin 10) [:float -> :float])
 (typecheck (sin [1 2 3]) [:vec3 -> :vec3])

@@ -248,6 +248,23 @@
           (error "BUG: free variable not actually used"))))))))
   )
 
+(import ./builtins-prelude)
+(defn coerce-expr [value]
+  (if (expr? value)
+    value
+    # TODO: convert floats and tuples and variables and such into vectors
+    (pat/match value
+      |keyword? (expr/literal type/int value)
+      |boolean? (expr/literal type/bool value)
+      |number? (expr/literal type/float value)
+      |variable? (expr/identifier value)
+      |tuple? (let [args (map coerce-expr value)]
+        (expr/call (builtins-prelude/resolve-vec-constructor nil "[]" (tmap expr/type args)) args))
+      # TODO:
+      #['. expr field] [expr/dot (of-ast expr) ['quote field]]
+      (errorf "Can't coerce %q into an expression" value)
+      )))
+
 (def- multifunction-proto @{:type 'function})
 (defn multifunction? [t] (and (table? t) (= (table/getproto t) multifunction-proto)))
 (defmodule multifunction
@@ -285,23 +302,6 @@
     (function/match (resolve-function (resolve-multifunction t) arg-types)
       (custom impl) impl
       (builtin name _ _) (errorf "cannot implement builtin %s" name)))
-
-  (import ./builtins-prelude)
-  (defn- coerce-expr [value]
-    (if (expr? value)
-      value
-      # TODO: convert floats and tuples and variables and such into vectors
-      (pat/match value
-        |keyword? (expr/literal type/int value)
-        |boolean? (expr/literal type/bool value)
-        |number? (expr/literal type/float value)
-        |variable? (expr/identifier value)
-        |tuple? (let [args (map coerce-expr value)]
-          (expr/call (builtins-prelude/resolve-vec-constructor nil "[]" (tmap expr/type args)) args))
-        # TODO:
-        #['. expr field] [expr/dot (of-ast expr) ['quote field]]
-        (errorf "Can't coerce %q into an expression" value)
-        )))
 
   (defn- wrapper-function [multifunction]
     (def wrapper (fn [& args]

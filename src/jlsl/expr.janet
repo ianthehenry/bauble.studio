@@ -14,7 +14,7 @@
       |keyword? [expr/literal ['quote type/int] ast]
       |boolean? [expr/literal ['quote type/bool] ast]
       |number? [expr/literal ['quote type/float] ast]
-      |symbol? [expr/identifier ast]
+      |symbol? [coerce-expr ast]
       |btuple? [call ~',builtins/vec (map of-ast ast)]
       ['. expr field] [expr/dot (of-ast expr) ['quote field]]
       ['in expr index] [expr/in (of-ast expr) (of-ast index)]

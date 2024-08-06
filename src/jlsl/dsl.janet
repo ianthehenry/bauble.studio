@@ -55,7 +55,7 @@
     (def <1> (@type/primitive (quote (<2> float))))
     (def <3> [(upscope (def <4> (@new (@type/primitive (quote (<2> float))) :in)) (def x (@new "x" (@type <4>))) (@new x <4>))])
     (def <5> @[])
-    (@array/push <5> (@statement/return (@expr/identifier x)))
+    (@array/push <5> (@statement/return (@coerce-expr x)))
     (@function/custom (@implement (@resolve-impl incr (@tmap @type <3>)) <1> <3> <5>))))
 (test-macro (jlsl/defn :float incr [:float x] (return x))
   (upscope
@@ -64,7 +64,7 @@
       (def <2> (@type/primitive (quote (<1> float))))
       (def <3> [(upscope (def <4> (@new (@type/primitive (quote (<1> float))) :in)) (def x (@new "x" (@type <4>))) (@new x <4>))])
       (def <5> @[])
-      (@array/push <5> (@statement/return (@expr/identifier x)))
+      (@array/push <5> (@statement/return (@coerce-expr x)))
       (@function/custom (@implement (@resolve-impl incr (@tmap @type <3>)) <2> <3> <5>)))))
 
 (test-macro (jlsl/defn :void foo [:float x :float y]
@@ -77,7 +77,7 @@
       (def <4> [(upscope (def <5> (@new (@type/primitive (quote (<2> float))) :in)) (def x (@new "x" (@type <5>))) (@new x <5>)) (upscope (def <6> (@new (@type/primitive (quote (<2> float))) :in)) (def y (@new "y" (@type <6>))) (@new y <6>))])
       (def <7> @[])
       (@array/push <7> (upscope (def <8> (@expr/literal (quote (<1> primitive (<2> float))) 1)) (def <9> (@expr/type <8>)) (def x (@new "x" <9>)) (@statement/declaration false x <8>)))
-      (@array/push <7> (@statement/return (@call (quote "<function 0x1>") @[(@expr/identifier x) (@expr/literal (quote (<1> primitive (<2> float))) 2) (@expr/literal (quote (<1> primitive (<2> float))) 3)])))
+      (@array/push <7> (@statement/return (@call (quote "<function 0x1>") @[(@coerce-expr x) (@expr/literal (quote (<1> primitive (<2> float))) 2) (@expr/literal (quote (<1> primitive (<2> float))) 3)])))
       (@function/custom (@implement (@resolve-impl foo (@tmap @type <4>)) <3> <4> <7>)))))
 
 (test (jlsl/defn :void foo [:float x :float y]

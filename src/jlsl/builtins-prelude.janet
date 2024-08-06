@@ -56,11 +56,14 @@
 
 (defn check-floaty-prim [prim]
   (primitive-type/match prim
-    (bool) (error "expected floating-point type")
     (float) nil
     (double) nil
-    (int) (error "expected floating-point type")
-    (uint) (error "expected floating-point type")))
+    (error "expected floating-point type")))
+
+(defn check-bool-prim [prim]
+  (primitive-type/match prim
+    (bool) nil
+    (error "expected bool type")))
 
 (defn resolve-comparison-op [&opt alt] (partial resolve-very-generic
   (fn [base-type components]
