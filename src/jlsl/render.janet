@@ -138,7 +138,7 @@
             ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render/param params)]))))
     results))
 
-(defn validate-program [program]
+(defn- validate-program [program]
   (def {:main main :inputs inputs :outputs outputs :uniforms uniforms} program)
   (def return-type (function/return-type main))
   (def implicit-params (function/implicit-params main))
@@ -162,6 +162,7 @@
     (def $uniforms (gensym))
     (def $inputs (gensym))
     (def $outputs (gensym))
+    (def $precisions (gensym))
 
     (var defined-main? false)
 
@@ -171,25 +172,27 @@
           ['defn _ 'main &] (set defined-main? true)
           nil)
         (pat/match form
-          ['uniform type name] ~(array/push ,$uniforms (def ,name (,variable/new ,(string name) ,(type/of-ast type))))
-          ['in type name] ~(array/push ,$inputs (def ,name (,variable/new ,(string name) ,(type/of-ast type))))
-          ['out type name] ~(array/push ,$outputs (def ,name (,variable/new ,(string name) ,(type/of-ast type))))
+          ['uniform type name] ~(,array/push ,$uniforms (def ,name (,variable/new ,(string name) ,(type/of-ast type))))
+          ['in type name] ~(,array/push ,$inputs (def ,name (,variable/new ,(string name) ,(type/of-ast type))))
+          ['out type name] ~(,array/push ,$outputs (def ,name (,variable/new ,(string name) ,(type/of-ast type))))
           ['defn & args] ~(as-macro ,jlsl/defn ,;args)
           ['declare & args] ~(as-macro ,jlsl/declare ,;args)
           ['implement & args] ~(as-macro ,jlsl/implement ,;args)
           ['unquote & args] args
-          (errorf "unknown top-level form %q" form))))
+          ['precision &] ~(,array/push ,$precisions ',form))))
     (unless defined-main?
       (error "program with no main function"))
     ~(do
       (def ,$uniforms @[])
       (def ,$inputs @[])
       (def ,$outputs @[])
+      (def ,$precisions @[])
       ,;<statements>
       (,validate-program
         {:uniforms ,$uniforms
          :inputs ,$inputs
          :outputs ,$outputs
+         :precisions ,$precisions
          :main (,multifunction/resolve-function main [])}))
     ))
 
@@ -198,11 +201,12 @@
   (with-syms [$var]
     ~(fn [,$var] [',thing (,type/to-glsl (,variable/type ,$var)) (,allocate-identifier ,$var)])))
 
-(defn render/program [{:uniforms uniforms :inputs inputs :outputs outputs :main main}]
+(defn render/program [{:precisions precisions :uniforms uniforms :inputs inputs :outputs outputs :main main}]
   (def global-scope (bimap/new))
   (def root-variables (array/concat uniforms inputs outputs))
   (with-dyns [*identifier-map* (new-scope)]
-    [;(map (declare in) inputs)
+    [;precisions
+     ;(map (declare in) inputs)
      ;(map (declare out) outputs)
      ;(map (declare uniform) uniforms)
      ;(render/function main root-variables)
@@ -219,9 +223,10 @@
     (def <1> @[])
     (def <2> @[])
     (def <3> @[])
-    (array/push <1> (def t (@new "t" (@type/primitive (quote (<4> float))))))
+    (def <4> @[])
+    (@array/push <1> (def t (@new "t" (@type/primitive (quote (<5> float))))))
     (as-macro @jlsl/defn :void main [] (return 10))
-    (@validate-program {:inputs <2> :main (@resolve-function main []) :outputs <3> :uniforms <1>})))
+    (@validate-program {:inputs <2> :main (@resolve-function main []) :outputs <3> :precisions <4> :uniforms <1>})))
 
 (deftest "various sorts of illegal programs"
   (test-error (program/new
