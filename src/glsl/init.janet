@@ -203,7 +203,9 @@
       (printer/bracket-body p "{" "}"
         (each statement statements
           (render-statement p statement)))
-      (when newline-after-block? (printer/newline p))
+      (if newline-after-block?
+        (printer/newline p)
+        (printer/prin p " "))
       (set semicolon? false))
     ['if cond then & else] (do
       (assert (<= (length else) 1) "too many arguments to if")
@@ -212,7 +214,7 @@
       (printer/prin p ") ")
       (render-statement p then :newline-after-block? (empty? else))
       (unless (empty? else)
-        (printer/prin p " else ")
+        (printer/prin p "else ")
         (render-statement p (first else)))
       (set semicolon? false))
     ['case value & cases] (do
@@ -240,7 +242,7 @@
     ['do-while cond & body] (do
       (printer/prin p "do ")
       (render-statement p ~(do ,;body) :newline-after-block? false)
-      (printer/prin p " while (")
+      (printer/prin p "while (")
       (render-expression p cond)
       (printer/prin p ")"))
     ['for init check advance & body] (do
@@ -519,6 +521,34 @@
       foo[0] = 10.0;
       foo[0] += 10.0;
       f(foo) *= 10.0;
+    }
+    
+  `))
+
+(deftest "if formatting"
+  (test-statements [
+    (if (< x 10) (return 1))
+    (if (< x 10) (return 1) (return 2))
+    (if (< x 10) (do (return 1)) (return 2))
+    (if (< x 10) (do (return 1)) (do (return 2)))
+    (if (< x 10) (return 1) (do (return 2)))
+    ] `
+    void main() {
+      if (x < 10.0) return 1.0;
+      if (x < 10.0) return 1.0;
+      else return 2.0;
+      if (x < 10.0) {
+        return 1.0;
+      } else return 2.0;
+      if (x < 10.0) {
+        return 1.0;
+      } else {
+        return 2.0;
+      }
+      if (x < 10.0) return 1.0;
+      else {
+        return 2.0;
+      }
     }
     
   `))
