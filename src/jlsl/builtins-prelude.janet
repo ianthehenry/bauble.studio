@@ -17,8 +17,8 @@
     (let [min-arity (math/abs arity)]
       (when (< actual min-arity)
         (errorf "%s needs at least %d arguments but you gave it %d" name min-arity actual)))
-    (unless (= arity actual)
-      (errorf "%s needs %d arguments but you gave it %d" name arity actual))))
+    (assertf (= arity actual)
+      "%s needs %d arguments but you gave it %d" name arity actual)))
 
 (defn builtin [name type arg-types]
   (function/builtin name type (map |(if (param-sig? $) $ (param-sig/in $)) arg-types)))
@@ -85,13 +85,12 @@
   (def base-type (get-unique type/base-type arg-types (on-same-type-error name arg-types)))
   (def components (sum (map type/components arg-types)))
   (if (nil? expected-components) (do
-    (unless (>= components 2)
-      (error "vector constructor needs at least two components"))
-    (unless (<= components 4)
-      (error "vector constructor cannot have more than four components")))
-    (unless (= components expected-components)
-      (errorf "%s expects %d components, got %d" name expected-components components)))
+    (assert (>= components 2) "vector constructor needs at least two components")
+    (assert (<= components 4) "vector constructor cannot have more than four components"))
+    (assertf (or (= components 1) (= components expected-components))
+      "%s expects %d components, got %d" name expected-components components))
   (def constructor (primitive-type/vec-prefix base-type))
+  (def components (or expected-components components))
   (builtin
     (string constructor components)
     (type/vec base-type components)
@@ -100,12 +99,11 @@
 (defn resolve-matrix-constructor [cols rows name arg-types]
   (check-arity name -1 arg-types)
   (def base-type (get-unique type/base-type arg-types (on-same-type-error name arg-types)))
-  (unless (= base-type (primitive-type/float))
-    (error "matrices must contain floats"))
+  (assert (= base-type (primitive-type/float)) "matrices must contain floats")
   (def components (sum (map type/components arg-types)))
   (def expected-components (* rows cols))
-  (unless (= components expected-components)
-    (errorf "%s constructor needs %d components, but got %d" name expected-components))
+  (assertf (or (= components 1) (= components expected-components))
+    "%s constructor needs %d components, but got %d" name expected-components components)
   (builtin
     name
     (type/mat cols rows)

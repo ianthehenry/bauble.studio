@@ -33,14 +33,50 @@
   (if-let [return-type (in types arg-types)]
     (builtin name return-type arg-types))))
 
-(defn resolve-refract [name arg-types]
+(defn- resolve-refract [name arg-types]
   (check-arity name 3 arg-types)
-  #(errorf "%s: type error, expected %q got %q" name (type/to-glsl type/float) (type/to-glsl (in arg-types 2)))
-  (unless (= (in arg-types 2) type/float)
-    (errorf "%s: type error, expected %q got %q" name (type/to-glsl type/float) (type/to-glsl (in arg-types 2))))
+  (assertf (= (in arg-types 2) type/float)
+    "%s: type error, expected %q got %q" name (type/to-glsl type/float) (type/to-glsl (in arg-types 2)))
   (function/match (resolve-generic 2 name (tuple/slice arg-types 0 2))
     (builtin name return-type param-sigs) (builtin name return-type [;param-sigs type/float])
     (error "BUG")))
+
+(defn- resolve-one-multiply [l r]
+  (type/match l
+    (primitive _) r
+    (vec _ l-components)
+      (type/match r
+        (primitive _) l
+        (vec _ r-components) (do
+          (assert (= l-components r-components) "cannot multiply vectors of different lengths")
+          l)
+        (mat r-cols r-rows) (do
+          (assert (= r-rows l-components) "matrix multiplication mismatch")
+          (type/vec (primitive-type/float) r-cols))
+        (error "BUG"))
+    (mat l-cols l-rows)
+      (type/match r
+        (primitive _) l
+        (vec _ r-components) (do
+          (assert (= r-components l-cols) "matrix multiplication mismatch")
+          (type/vec (primitive-type/float) l-rows))
+        (mat r-cols r-rows) (do
+          (assert (= l-cols r-rows) "attempt to multiply incompatible matrices")
+          (type/mat r-cols l-rows))
+        (error "BUG"))
+    (error "BUG")))
+
+(test (type/to-glsl (resolve-one-multiply (type/mat 2 3) (type/mat 3 2))) :mat3)
+
+(defn- resolve-float-multiply [arg-types]
+  (builtin "*" (reduce2 resolve-one-multiply arg-types) arg-types))
+
+(defn- resolve-multiplication [name arg-types]
+  (check-arity name -2 arg-types)
+  (def base-type (get-unique type/base-type arg-types (on-same-type-error name arg-types)))
+  (primitive-type/match base-type
+    (float) (resolve-float-multiply arg-types)
+    (resolve-generic -2 name arg-types)))
 
 (defmacro- defbuiltin [sym f &opt name]
   (default name (string sym))
@@ -51,7 +87,7 @@
 
 (defbinop + -2)
 (defbinop - -1)
-(defbinop * -2)
+(defbuiltin * resolve-multiplication)
 (defbinop / -1)
 (defbinop % 2)
 
@@ -139,6 +175,24 @@
 (defbuiltin smoothstep (partial resolve-generic 3))
 (defbuiltin fma (partial resolve-generic 3))
 
+(typecheck (* 1 2) [:float :float -> :float])
+(typecheck (* (vec2 1) (vec2 1)) [:vec2 :vec2 -> :vec2])
+(test-error (* (vec2 1) (vec3 1)) "cannot multiply vectors of different lengths")
+(typecheck (* (mat2 1) 2) [:mat2 :float -> :mat2])
+(typecheck (* (vec2 1) 2) [:vec2 :float -> :vec2])
+(typecheck (* 2 (mat2 1)) [:float :mat2 -> :mat2])
+(typecheck (* 2 (vec2 1)) [:float :vec2 -> :vec2])
+(typecheck (* (mat2 1) (vec2 1)) [:mat2 :vec2 -> :vec2])
+(typecheck (* (vec2 1) (mat2 1)) [:vec2 :mat2 -> :vec2])
+(typecheck (* (vec3 1) (mat2x3 1)) [:vec3 :mat2x3 -> :vec2])
+(test-error (* (mat2x3 1) (vec3 1)) "matrix multiplication mismatch")
+(test-error (* (mat2x3 1) (mat2x3 1)) "attempt to multiply incompatible matrices")
+(test-error (* (vec3 1) (mat2 1)) "matrix multiplication mismatch")
+(test-error (* (mat2 1) (vec3 1)) "matrix multiplication mismatch")
+(typecheck (* (mat2x4 1) (mat3x2 1)) [:mat2x4 :mat3x2 -> :mat3x4])
+(typecheck (* (mat2x4 1) (mat3x2 1) (vec3 1)) [:mat2x4 :mat3x2 :vec3 -> :vec4])
+(typecheck (* (mat2x4 1) (mat3x2 1) (mat2x3 1)) [:mat2x4 :mat3x2 :mat2x3 -> :mat2x4])
+
 (test-error (and true) "and needs at least 2 arguments but you gave it 1")
 (typecheck (and true false) [:bool :bool -> :bool])
 # TODO: glsl actually doesn't support this overload
@@ -156,8 +210,12 @@
 # TODO: maybe worth changing...
 (typecheck (sin [true false]) [:bvec2 -> :bvec2])
 
+(typecheck (vec3 1) [:float -> :vec3])
+(test-error (vec3 1 2) "vec3 expects 3 components, got 2")
 (typecheck (vec3 1 2 3) [:float :float :float -> :vec3])
 (typecheck (mat2 1 2 3 4) [:float :float :float :float -> :mat2])
+(typecheck (mat2 1) [:float -> :mat2])
+(test-error (mat2 1 2) "mat2 constructor needs 4 components, but got 2")
 (typecheck (mat2 [1 2] [3 4]) [:vec2 :vec2 -> :mat2])
 (typecheck (mat2x3 [1 2] [3 4] [5 6]) [:vec2 :vec2 :vec2 -> :mat2x3])
 (typecheck (mat3x2 [1 2 3] [4 5 6]) [:vec3 :vec3 -> :mat3x2])
