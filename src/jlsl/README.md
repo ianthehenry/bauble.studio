@@ -116,7 +116,7 @@ You can also *modify* dynamic variables using `with`. For example:
 
 That will produce code like this:
 
-```
+```janet
 (defn :float box [:vec3 p :vec3 size]
   (var :vec3 q (- (abs p) size))
   (return (+ (length (max q 0)) (min (max q.x (max q.y q.z)) 0))))
@@ -131,6 +131,14 @@ That will produce code like this:
 So there's this slighty awkward thing where some names like `+` and `length` are both Janet and GLSL functions. We shadow these functions with functions that first check their arguments to see if you're calling them with any jlsl expressions. If so, the result is an expression. Otherwise/
 
 So for example, `(+ 1 2)` will return `3`, but `(+ 1 p)` will return an expression.
+
+## beware: `length`
+
+The function called `length` defined in `jlsl/builtins` and `jlsl/flexins` is equivalent to the GLSL `length` function that returns Euclidean length, *not* the Janet length function that returns the number of elements in a container. If you want to count elements, use `@length`, which is an alias for Janet's builtin `length` function.
+
+## beware: `and` and `or`
+
+The `jlsl/flexins` module defines `and` and `or` *functions* that shadow Janet's native `and` and `or` *macros*. This means that they are not short-circuiting! If you want to use `and` and `or` for control flow, use `@and` and `@or`, which are aliases for the native macros.
 
 # future work
 
