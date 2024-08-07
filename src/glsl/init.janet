@@ -207,6 +207,10 @@
         (printer/newline p)
         (printer/prin p " "))
       (set semicolon? false))
+    ['upscope & statements] (do
+      (each statement statements
+        (render-statement p statement))
+      (set semicolon? false))
     ['if cond then & else] (do
       (assert (<= (length else) 1) "too many arguments to if")
       (printer/prin p "if (")
@@ -521,6 +525,20 @@
       foo[0] = 10.0;
       foo[0] += 10.0;
       f(foo) *= 10.0;
+    }
+    
+  `))
+
+(deftest "do vs upscope"
+  (test-statements [
+    (do (var :float x 10))
+    (upscope (var :float x 10))
+    ] `
+    void main() {
+      {
+        float x = 10.0;
+      }
+      float x = 10.0;
     }
     
   `))
