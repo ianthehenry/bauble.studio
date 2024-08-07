@@ -15,6 +15,8 @@
   (def PI 3.14159265359)
   (def DEG_TO_RAD (/ PI 180))
 
+  (jlsl/jlsl/defdyn p :vec3)
+
   (def program (jlsl/render/program (jlsl/program/new
     (precision highp float)
     (uniform :vec3 camera-origin)
@@ -50,25 +52,29 @@
         s c 0
         0 0 1)))
 
-    (defn :float s3d-ellipsoid [:vec3 p :vec3 size]
+    (defn :float s3d-ellipsoid [:vec3 size]
       (var k0 (length (/ p size)))
       (var k1 (length (/ p (* size size))))
       (return (/ (* k0 (- k0 1)) k1)))
 
-    (defn :float nearest-distance [:vec3 p]
-      (return (s3d-ellipsoid p (vec3 50 50 100))))
+    (defn :float moved []
+      (with [p (- p [50 0 -50])]
+        (return (s3d-ellipsoid [50 50 100]))))
+
+    (defn :float nearest-distance []
+      (return (min (moved) (s3d-ellipsoid [50 50 100]))))
 
     (defn :vec3 march [:vec3 ray-origin :vec3 ray-direction]
       (var distance 0)
 
       (for (var steps :0) (< steps MAX_STEPS) (++ steps)
-        (var p (+ ray-origin (* distance ray-direction)))
-        (var nearest (nearest-distance p))
+        (with [p (+ ray-origin (* distance ray-direction))]
+          (var nearest (nearest-distance))
 
-        (if (or (< nearest MINIMUM_HIT_DISTANCE) (> distance MAXIMUM_TRACE_DISTANCE))
-          (return (+ p (* nearest ray-direction))))
+          (if (or (< nearest MINIMUM_HIT_DISTANCE) (> distance MAXIMUM_TRACE_DISTANCE))
+            (return (+ p (* nearest ray-direction))))
 
-        (+= distance nearest))
+          (+= distance nearest)))
       (return (+ ray-origin (* distance ray-direction))))
 
     (defn :vec3 perspective [:float fov :vec2 size :vec2 pos]
@@ -77,19 +83,19 @@
       (var cot-half-fov (tan (* (- 90 (* fov 0.5)) DEG_TO_RAD)))
       (var z (* (min (. size x) (. size y)) 0.5 cot-half-fov))
 
-      (return (normalize (vec3 xy (- z)))))
+      (return (normalize [xy (- z)])))
 
-    (defn :vec3 calculate-normal [:vec3 p]
+    (defn :vec3 calculate-normal []
       (def step (vec2 NORMAL_OFFSET 0))
-      (var x (nearest-distance p))
+      (var x (nearest-distance))
+      (var offset (vec3 0))
+      (with [p (- p (. step xyy))] (set (. offset x) (nearest-distance)))
+      (with [p (- p (. step yxy))] (set (. offset y) (nearest-distance)))
+      (with [p (- p (. step yyx))] (set (. offset z) (nearest-distance)))
+      (return (normalize (- (vec3 x) offset))))
 
-      (return (normalize (vec3
-        (- x (nearest-distance (- p (. step xyy))))
-        (- x (nearest-distance (- p (. step yxy))))
-        (- x (nearest-distance (- p (. step yyx))))))))
-
-    (defn :vec3 nearest-color [:vec3 p]
-      (var normal (calculate-normal p))
+    (defn :vec3 nearest-color []
+      (var normal (calculate-normal))
       (return (+ 0.5 (* 0.5 normal))))
 
     (defn :void main []
@@ -111,14 +117,14 @@
         (def dark (pow (/ [40 42 46] 255) (vec3 gamma)))
         (set color (vec3 (mix dark light (/ (+ (. local-coord x) (. local-coord y))
           (+ (. resolution x) (. resolution y)))))))
-        (do
-          (set color (nearest-color hit))))
+        (with [p hit] (set color (nearest-color))))
 
       (set frag-color (vec4 (pow color (vec3 (/ gamma))) alpha)))
     )))
+  (setdyn *verbose* true)
   (def shader (shader/new program))
   (def image (shader/render shader [512 512]
     :camera-origin [256 362 256]
     :camera-orientation [(* 0.125 math/pi 2) (* -0.125 math/pi 2) 0]
     :t 0))
-  (jaylib/export-image image "test-glsl.png"))
+  (jaylib/export-image image "test-jlsl.png"))

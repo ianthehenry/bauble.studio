@@ -5,7 +5,6 @@
 (import ../src/glsl)
 
 (defdyn *verbose*)
-(setdyn *verbose* true)
 
 (defn compile-shader [source]
   (let [[expr env] (bauble/bauble-evaluator/evaluate source)
