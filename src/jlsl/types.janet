@@ -171,7 +171,7 @@
         (if cond then else) (do
           (see-expr cond :read)
           (visit then)
-          (visit else))
+          (if else (visit else)))
         (case value cases) (do
           (see-expr value :read)
           (each case cases

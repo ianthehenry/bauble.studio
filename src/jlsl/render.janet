@@ -783,6 +783,21 @@
     }
   `))
 
+(deftest "if statements"
+  (test-function
+    (jlsl/fn :float "sign" [:float x]
+      (if (= x 0)
+        (return 0))
+      (if (< x 0)
+        (return -1)
+        (return 1))) `
+    float sign(float x) {
+      if (x == 0.0) return 0.0;
+      if (x < 0.0) return -1.0;
+      else return 1.0;
+    }
+  `))
+
 (deftest "arrays"
   (test-function
     (jlsl/fn :float "foo" [(:float 10) foos]
