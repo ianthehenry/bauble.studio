@@ -202,7 +202,7 @@
 
 (defn render/program [{:precisions precisions :uniforms uniforms :inputs inputs :outputs outputs :main main}]
   (def global-scope (bimap/new))
-  (def root-variables (array/concat uniforms inputs outputs))
+  (def root-variables (array/concat @[] uniforms inputs outputs))
   (with-dyns [*identifier-map* (new-scope)]
     [;precisions
      ;(map (declare in) inputs)
@@ -285,6 +285,17 @@
   (defn :void main []
     (return 10))))
   [[uniform :float t]
+   [defn :void main [] [return 10]]])
+
+(test (render/program (program/new
+  (uniform :float t)
+  (in :float t)
+  (out :float t)
+  (defn :void main []
+    (return 10))))
+  [[in :float t]
+   [out :float t1]
+   [uniform :float t2]
    [defn :void main [] [return 10]]])
 
 (defmacro*- test-function [expr & results]
