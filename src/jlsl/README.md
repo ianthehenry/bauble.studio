@@ -64,7 +64,7 @@ It uses type-directed disambiguation to know that you wanted the result to be a 
 
 # overloads
 
-Some builtins have more general overloads than in native GLSL. For example, the JLSL expression `(< x y)` compiles to either the `x < y` (a `bool`) or `lessThan(x, y)` (a `bvec`) depending on the type of its arguments.
+Some builtins have more general overloads than in native GLSL. For example, the `jlsl` expression `(< x y)` compiles to either the `x < y` (a `bool`) or `lessThan(x, y)` (a `bvec`) depending on the type of its arguments.
 
 `(= x y)` and `(not= x y)` are not overloaded this way; you need to explicitly use `(equal x y)` and `(not-equal x y)` if you want the `bvec` forms (because it's perfectly reasonable to compare vectors for equality).
 
@@ -117,6 +117,7 @@ You can also *modify* dynamic variables using `with`. For example:
 That will produce code like this:
 
 ```janet
+# TODO: it would be better to show the compiled GLSL code here
 (defn :float box [:vec3 p :vec3 size]
   (var :vec3 q (- (abs p) size))
   (return (+ (length (max q 0)) (min (max q.x (max q.y q.z)) 0))))
@@ -126,15 +127,75 @@ That will produce code like this:
   (return (box p (vec3 50 100 50))))
 ```
 
+# `do` expressions
+
+`jlsl` supports `do` expressions, which are compiled to immediately-invoked function expressions. For example:
+
+```janet
+(jlsl/defn :float main []
+  (return (do (var x 10) (+= x 5) x)))
+```
+
+Produces:
+
+```glsl
+float do() {
+  float x = 10.0;
+  x += 5.0;
+  return x;
+}
+
+float main() {
+  return do();
+}
+```
+
+Because of the existence of `out` and `inout` parameters, and `jlsl`'s notion of dynamic scope, you can capture and even modify variables inside `do` expressions. For example, this slight variation:
+
+```janet
+(jlsl/defn :float main []
+  (var x 10)
+  (return (do (+= x 5) x)))
+```
+
+Produces the following code:
+
+```glsl
+float do(inout float x) {
+  x += 5.0;
+  return x;
+}
+
+float main() {
+  float x = 10.0;
+  return do(x);
+}
+```
+
+# `with` expressions
+
+Similarly, `jlsl` supports `with` expressions, which behave much like `with` statements wrapped in `do`. These two formulations produce equivalent code:
+
+```janet
+(defn :float distance []
+  (with [p (- p [100 0 0])]
+    (return (box (vec3 50 100 50)))))
+
+(defn :float distance []
+  (return
+    (with [p (- p [100 0 0])]
+      (box (vec3 50 100 50)))))
+```
+
 # builtin function name resolution
 
-So there's this slighty awkward thing where some names like `+` and `length` are both Janet and GLSL functions. We shadow these functions with functions that first check their arguments to see if you're calling them with any jlsl expressions. If so, the result is an expression. Otherwise/
+So there's this slighty awkward thing where some names like `+` and `length` are both Janet and GLSL functions. We shadow these functions with functions that first check their arguments to see if you're calling them with any `jlsl` expressions (or `jlsl` variables, which are implicitly converted to `jlsl` identifier expressions). If so, the result is a `jlsl` expression. Otherwise, the function is normal Janet function is invoked.
 
 So for example, `(+ 1 2)` will return `3`, but `(+ 1 p)` will return an expression.
 
 ## beware: `length`
 
-The function called `length` defined in `jlsl/builtins` and `jlsl/flexins` is equivalent to the GLSL `length` function that returns Euclidean length, *not* the Janet length function that returns the number of elements in a container. If you want to count elements, use `@length`, which is an alias for Janet's builtin `length` function.
+The function called `length` defined in `jlsl/builtins` and `jlsl/flexins` is equivalent to the GLSL `length` function that returns the Euclidean of a vector length, *not* the Janet length function that returns the number of elements in a data structure. If you want to count elements, use `@length`, which is an alias for Janet's builtin `length` function.
 
 ## beware: `and` and `or`
 

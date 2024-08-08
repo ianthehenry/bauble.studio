@@ -35,7 +35,7 @@
     (def ,$params [,;<params>])
     (def ,$body @[])
     ,;<body>
-    (,function/custom (,impl/implement (,multifunction/resolve-impl ,name (,tmap ,param/type ,$params)) ,$return-type ,$params ,$body))))
+    (,multifunction/implement ,name ,$return-type ,$params ,$body)))
 
 # fn returns a single function
 (defmacro jlsl/fn [return-type name params & body]
@@ -59,7 +59,7 @@
     (def <3> [(upscope (def <4> (@new (@type/primitive (quote (<2> float))) :in)) (def x (@new "x" (@type <4>))) (@new x <4>))])
     (def <5> @[])
     (@array/push <5> (@statement/return (@coerce-expr x)))
-    (@function/custom (@implement (@resolve-impl incr (@tmap @type <3>)) <1> <3> <5>))))
+    (@implement incr <1> <3> <5>)))
 (test-macro (jlsl/defn :float incr [:float x] (return x))
   (upscope
     (def incr (@single "incr" (@type/primitive (quote (<1> float))) [(@new (@type/primitive (quote (<1> float))) :in)]))
@@ -68,7 +68,7 @@
       (def <3> [(upscope (def <4> (@new (@type/primitive (quote (<1> float))) :in)) (def x (@new "x" (@type <4>))) (@new x <4>))])
       (def <5> @[])
       (@array/push <5> (@statement/return (@coerce-expr x)))
-      (@function/custom (@implement (@resolve-impl incr (@tmap @type <3>)) <2> <3> <5>)))))
+      (@implement incr <2> <3> <5>))))
 
 (test-macro (jlsl/defn :void foo [:float x :float y]
   (var x 1)
@@ -81,7 +81,7 @@
       (def <7> @[])
       (@array/push <7> (upscope (def <8> (@expr/literal (quote (<1> primitive (<2> float))) 1)) (def <9> (@expr/type <8>)) (def x (@new "x" <9>)) (@statement/declaration false x <8>)))
       (@array/push <7> (@statement/return (@call (quote "<function 0x1>") @[(@coerce-expr x) (@expr/literal (quote (<1> primitive (<2> float))) 2) (@expr/literal (quote (<1> primitive (<2> float))) 3)])))
-      (@function/custom (@implement (@resolve-impl foo (@tmap @type <4>)) <3> <4> <7>)))))
+      (@implement foo <3> <4> <7>))))
 
 (test (jlsl/defn :void foo [:float x :float y]
   (var z 1)
@@ -216,23 +216,23 @@
                  <11>
                  "i"
                  [<4> primitive [<5> float]]]]]]
-             @[[<8>
-                update
-                +=
-                [<10>
-                 identifier
-                 [<2>
-                  lexical
-                  <9>
-                  "z"
-                  [<4> primitive [<5> float]]]]
-                [<10>
-                 identifier
-                 [<2>
-                  lexical
-                  <11>
-                  "i"
-                  [<4> primitive [<5> float]]]]]]]
+             [[<8>
+               update
+               +=
+               [<10>
+                identifier
+                [<2>
+                 lexical
+                 <9>
+                 "z"
+                 [<4> primitive [<5> float]]]]
+               [<10>
+                identifier
+                [<2>
+                 lexical
+                 <11>
+                 "i"
+                 [<4> primitive [<5> float]]]]]]]
             [<8>
              return
              [<10>

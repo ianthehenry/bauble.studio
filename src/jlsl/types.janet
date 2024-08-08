@@ -303,6 +303,10 @@
       (custom impl) impl
       (builtin name _ _) (errorf "cannot implement builtin %s" name)))
 
+  (defn implement [t return-type params body]
+    (function/custom (impl/implement (resolve-impl t (tmap param/type params))
+      return-type params body)))
+
   (defn- wrapper-function [multifunction]
     (def wrapper (fn [& args]
       (def args (map coerce-expr args))

@@ -72,8 +72,8 @@
     (case value cases)
       ['case ;(catseq [case :in cases]
         (pat/match case
-          [body] [(render/statement body)]
-          [value body] [(render/expr value) (render/statement body)]))]
+          [statement] [(render/statement statement)]
+          [value statement] [(render/expr value) (render/statement statement)]))]
     (while cond body) (subscope ['while (render/expr cond) ;(map render/statement body)])
     (do-while cond body) ['do-while (render/expr cond) ;(subscope (map render/statement body))]
     (for init cond update body)
@@ -809,6 +809,207 @@
     }
   `))
 
+# TODO
+(deftest "functions with the same name are allocated unique identifiers"
+  (test-function (do
+    (jlsl/defn :float foo []
+      (return 1))
+    (def foo1 foo)
+    (jlsl/defn :float foo [] (return (foo1)))) `
+    float foo() {
+      return 1.0;
+    }
+    
+    float foo() {
+      return foo();
+    }
+  `))
+
+(deftest "do expressions"
+  (test-function
+    (jlsl/defn :float main []
+      (return (do (var x 10) (+= x 5) x))) `
+    float do() {
+      float x = 10.0;
+      x += 5.0;
+      return x;
+    }
+    
+    float main() {
+      return do();
+    }
+  `)
+
+  (test-function
+    (jlsl/defn :float main []
+      (var x 10)
+      (return (do (+= x 5) x))) `
+    float do(inout float x) {
+      x += 5.0;
+      return x;
+    }
+    
+    float main() {
+      float x = 10.0;
+      return do(x);
+    }
+  `))
+
+(deftest "single expression do does not produce an iife"
+  (test-function
+    (jlsl/defn :float main []
+      (var x 10)
+      (return (do x))) `
+    float main() {
+      float x = 10.0;
+      return x;
+    }
+  `))
+
+(deftest "with expressions"
+  (jlsl/defdyn q :vec2)
+  (test-function (do
+    (jlsl/defn :float circle [:float r]
+      (return (- (length q) r)))
+
+    (jlsl/defn :float distance []
+      (return (with [q (- q [10 20])] (circle 10)))
+
+      (return (with [q (- q [10 20])]
+        (min (circle 10) (circle 20))))
+
+      (var x 0)
+      (return (with [q (- q [10 20])]
+        (set x 1)
+        (circle 20)))
+      )) `
+    float circle(float r, vec2 q) {
+      return length(q) - r;
+    }
+    
+    float with_outer(vec2 q) {
+      {
+        vec2 q1 = q - vec2(10.0, 20.0);
+        return circle(10.0, q1);
+      }
+    }
+    
+    float with_outer(vec2 q) {
+      {
+        vec2 q1 = q - vec2(10.0, 20.0);
+        return min(circle(10.0, q1), circle(20.0, q1));
+      }
+    }
+    
+    float with_inner(vec2 q, out float x) {
+      x = 1.0;
+      return circle(20.0, q);
+    }
+    
+    float with_outer(vec2 q, out float x) {
+      {
+        vec2 q1 = q - vec2(10.0, 20.0);
+        return with_inner(q1, x);
+      }
+    }
+    
+    float distance(vec2 q) {
+      return with_outer(q);
+      return with_outer(q);
+      float x = 0.0;
+      return with_outer(q, x);
+    }
+  `))
+
+(deftest "case statement"
+  (test-function
+    (jlsl/defn :float main []
+      (case 1
+        2 (return 1)
+        (return 2))) `
+    float main() {
+      switch (2.0) {
+      case return(1.0): return 2.0;
+      }
+    }
+  `))
+
+(deftest "do expressions restrict control flow"
+  (test-error
+    (jlsl/defn :float main []
+      (return (do (var x 10) (return 1) (+= x 5) x)))
+    "cannot return out of a do expression")
+  (test-error
+    (jlsl/defn :float main []
+      (return (do (break) 1)))
+    "cannot break out of a do expression")
+  (test-error
+    (jlsl/defn :float main []
+      (return (do (continue) 1)))
+    "cannot continue out of a do expression")
+  (test-function
+    (jlsl/defn :float main []
+      (return (do (case 1 2 (break)) 1))) `
+    float do() {
+      switch (2.0) {
+      default: break;
+      }
+      return 1.0;
+    }
+    
+    float main() {
+      return do();
+    }
+  `)
+  (test-error
+    (jlsl/defn :float main []
+      (return (do (case 1 2 (continue)) 1)))
+    "cannot continue out of a do expression")
+  (test-function
+    (jlsl/defn :float main []
+      (return (do (while true (break)) 1))) `
+    float do() {
+      while (true) {
+        break;
+      }
+      return 1.0;
+    }
+    
+    float main() {
+      return do();
+    }
+  `)
+  (test-function
+    (jlsl/defn :float main []
+      (return (do (do-while true (continue)) 1))) `
+    float do() {
+      do {
+        continue;
+      } while (true);
+      return 1.0;
+    }
+    
+    float main() {
+      return do();
+    }
+  `)
+  )
+
+(deftest "do expressions can set variables"
+  (test-function
+    (jlsl/defn :float main []
+      (var x 10)
+      (return (do (+= x 1) x))) `
+    float do(inout float x) {
+      x += 1.0;
+      return x;
+    }
+    
+    float main() {
+      float x = 10.0;
+      return do(x);
+    }
+  `))
 
 (deftest "increment/decrement statements"
   (test-function
