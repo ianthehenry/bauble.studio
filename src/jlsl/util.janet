@@ -177,5 +177,5 @@
   (assert (<= (length dflt) 1) "too many arguments")
   (or (core/dyn dynvar)
     (if (empty? dflt)
-      (errorf "%q is not set" dynvar)
+      (errorf "dynamic variable %q is not set" dynvar)
       (in dflt 0))))

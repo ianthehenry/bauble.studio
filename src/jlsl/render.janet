@@ -7,15 +7,26 @@
 (use ./types)
 (use ./dsl)
 
-(def- *identifier-map* (gensym))
+(def- *glsl-identifier-map* (gensym))
+(def- *glsl-function-name-map* (gensym))
 
-(defn resolve-identifier [variable] # and *identifier-map*
-  (or (bimap/in (dyn *identifier-map*) variable)
+(defn resolve-glsl-identifier [variable] # and *glsl-identifier-map*
+  (or (bimap/in (dyn *glsl-identifier-map*) variable)
     (errorf "BUG: variable %q is not in scope. This shouldn't happen, but it happened. How did it happen?"
       variable)))
 
-(defn- allocate-identifier [variable] # and *identifier-map*
-  (def identifier-map (dyn *identifier-map*))
+(defn resolve-glsl-function-name-aux [function] # and *glsl-function-name-map*
+  (function/match function
+    (builtin name _ _) (symbol name)
+    (custom _) (bimap/in (dyn *glsl-function-name-map*) function)))
+
+(defn resolve-glsl-function-name [function] # and *glsl-function-name-map*
+  (or (resolve-glsl-function-name-aux function)
+    (errorf "BUG: function %q is not in scope. This shouldn't happen, but it happened. How did it happen?"
+      function)))
+
+(defn- allocate-glsl-identifier [variable] # and *glsl-identifier-map*
+  (def identifier-map (dyn *glsl-identifier-map*))
   (var identifier (symbol (variable/name variable)))
   # there might be a more efficient way to do this, but who cares
   (var i 1)
@@ -24,35 +35,57 @@
     (++ i))
   (bimap/put identifier-map variable identifier))
 
-(defn- render/expr [t] # and *identifier-map*
+(defn- collides-with-builtin? [name]
+  # TODO: it's illegal to define a GLSL function with the same name
+  # as a builtin function. we should detect that and generate something
+  # else
+  false)
+
+(defn- allocate-glsl-function-name [function] # and *glsl-function-name-map*
+  (def function-name-map (dyn *glsl-function-name-map*))
+  (def base-name
+    (if (collides-with-builtin? (function/name function))
+      (string (function/name function) "_")
+      (function/name function)))
+  (var function-name (symbol base-name))
+
+  # there might be a more efficient way to do this, but who cares
+  (var i 1)
+  (while (bimap/has-value? function-name-map function-name)
+    (set function-name (symbol base-name i))
+    (++ i))
+  (bimap/put function-name-map function function-name))
+
+(defn- allocate-or-resolve-glsl-function-name [function] # and *glsl-function-name-map*
+  (or (resolve-glsl-function-name-aux function) (allocate-glsl-function-name function)))
+
+(defn- render/expr [t] # and *glsl-identifier-map*
   (expr/match t
     (literal _ value) value
-    (identifier variable) (resolve-identifier variable)
+    (identifier variable) (resolve-glsl-identifier variable)
     (call function args)
-      # TODO: need to allocate GLSL names
-      [(symbol (function/name function))
+      [(resolve-glsl-function-name function)
         ;(map render/expr args)
         ;(map |(render/expr (expr/identifier (param/var $))) (function/implicit-params function))]
     (dot expr field) ['. (render/expr expr) field]
     (in expr index) ['in (render/expr expr) (render/expr index)]
     (crement op expr) [op (render/expr expr)]))
 
-(defn inherit-or-new-scope [] (bimap/new (dyn *identifier-map* nil)))
-(defn inherit-scope [] (bimap/new (dyn *identifier-map*)))
+(defn inherit-scope [] (bimap/new (dyn *glsl-identifier-map*)))
 (defn new-scope [] (bimap/new))
 
 (defmacro- subscope [& exprs]
-  ~(with-dyns [',*identifier-map* (,inherit-scope)]
+  ~(with-dyns [',*glsl-identifier-map* (,inherit-scope)]
     ,;exprs))
 
-(defn- render/statement [t] # and *identifier-map*
+(defn- render/statement [t] # and *glsl-identifier-map*
   (statement/match t
     (declaration const? variable expr) (do
       # render before we allocate the identifier
       (def rendered-expr (render/expr expr))
       [(if const? 'def 'var)
         (type/to-glsl (variable/type variable))
-        (allocate-identifier variable)
+        (allocate-glsl-identifier variable)
         rendered-expr])
     (assign l-value r-value)
       ['set (render/expr l-value) (render/expr r-value)]
@@ -82,8 +115,8 @@
     (expr expr) (render/expr expr))
   )
 
-(defn- render/param [param] # and *identifier-map*
-  [(param-sig/to-glsl (param/sig param)) (allocate-identifier (param/var param))])
+(defn- render/param [param] # and *glsl-identifier-map*
+  [(param-sig/to-glsl (param/sig param)) (allocate-glsl-identifier (param/var param))])
 
 (defn render/function [root-function &opt root-variables]
   (assert (function? root-function) "render/function called with a non-function. did you forget to resolve a multifunction?")
@@ -99,23 +132,22 @@
     (when visiting?
       # we don't need a forward declaration for a direct recursive call
       (unless (= node (find-last function? stack))
-        (put forwards node true))
+        (put forwards node true)
+        (allocate-glsl-function-name node))
       (break))
 
-    # TODO: we use inherit-or-new-scope so that we can call render/function in
-    # tests without having to create a dummy root scope. maybe not worth it
     # We inherit in the root function so that it has uniforms, inputs, and outputs
     # in scope already. But for non-root functions, we're going to forward uniforms
     # etc. as normal implicit arguments. We could revisit this at some points in
     # the future, but I expect that GLSL compilers are smart enough that it doesn't
     # make a difference.
-    (def function-scope (if (= node root-function) (inherit-or-new-scope) (new-scope)))
+    (def function-scope (if (= node root-function) (inherit-scope) (new-scope)))
     (def root-variable-set (tabseq [variable :in root-variables] variable true))
 
     (function/match node
       (builtin _ _ _) nil
       (custom {:name name :declared-return-type return-type :params params :body body})
-        (with-dyns [*identifier-map* function-scope]
+        (with-dyns [*glsl-identifier-map* function-scope]
           (assertf (not (empty? body)) "%s: unimplemented function" name)
           (def implicit-params
             (if (= node root-function)
@@ -123,8 +155,8 @@
                 (function/implicit-params node))
               (function/implicit-params node)))
 
-          # TODO: we should make sure we're actually generating a unique name
-          (def glsl-name (symbol name))
+          # we might have already allocated an identifier due to a forward declaration
+          (def glsl-name (allocate-or-resolve-glsl-function-name node))
           (def glsl ~(defn ,(type/to-glsl return-type) ,glsl-name [,;(mapcat render/param [;params ;implicit-params])]
             ,;(map render/statement body)))
           (array/push results glsl)))))
@@ -134,7 +166,7 @@
       (function/match function
         (builtin _ _ _) (error "BUG: cannot forward-declare a builtin function")
         (custom {:name name :declared-return-type return-type :params params})
-          (with-dyns [*identifier-map* (bimap/new)]
+          (with-dyns [*glsl-identifier-map* (bimap/new)]
             ~(defn ,(type/to-glsl return-type) ,name [,;(mapcat render/param params)]))))
     results))
 
@@ -198,12 +230,13 @@
 (defmacro declare [thing]
   # TODO: allocate a decent name for this uniform??
   (with-syms [$var]
-    ~(fn [,$var] [',thing (,type/to-glsl (,variable/type ,$var)) (,allocate-identifier ,$var)])))
+    ~(fn [,$var] [',thing (,type/to-glsl (,variable/type ,$var)) (,allocate-glsl-identifier ,$var)])))
 
 (defn render/program [{:precisions precisions :uniforms uniforms :inputs inputs :outputs outputs :main main}]
   (def global-scope (bimap/new))
   (def root-variables (array/concat @[] uniforms inputs outputs))
-  (with-dyns [*identifier-map* (new-scope)]
+  (with-dyns [*glsl-identifier-map* (new-scope)
+              *glsl-function-name-map* (bimap/new)]
     [;precisions
      ;(map (declare in) inputs)
      ;(map (declare out) outputs)
@@ -299,7 +332,10 @@
    [defn :void main [] [return 10]]])
 
 (defmacro*- test-function [expr & results]
-  ~(test-stdout (,prin (,glsl/render-program (,render/function ,expr))) ,;results))
+  ~(test-stdout (,prin (,glsl/render-program
+    (as-macro ,with-dyns [',*glsl-identifier-map* (,new-scope)
+                          ',*glsl-function-name-map* (,bimap/new)]
+      (,render/function ,expr)))) ,;results))
 
 (defmacro*- test-program [expr & results]
   ~(test-stdout (,prin (,glsl/render-program (,render/program ,(call program/new ;expr)))) ,;results))
@@ -430,14 +466,6 @@
       return t1 + foo(10.0, t);
     }
   `))
-
-(test (render/function (jlsl/defn :float incr [:float x]
-  (return (+ x 1))))
-  @[[defn
-     :float
-     incr
-     [:float x]
-     [return [+ x 1]]]])
 
 (deftest "only referenced functions are included"
   (test-function (do
@@ -809,7 +837,6 @@
     }
   `))
 
-# TODO
 (deftest "functions with the same name are allocated unique identifiers"
   (test-function (do
     (jlsl/defn :float foo []
@@ -820,7 +847,7 @@
       return 1.0;
     }
     
-    float foo() {
+    float foo1() {
       return foo();
     }
   `))
@@ -894,7 +921,7 @@
       }
     }
     
-    float with_outer(vec2 q) {
+    float with_outer1(vec2 q) {
       {
         vec2 q1 = q - vec2(10.0, 20.0);
         return min(circle(10.0, q1), circle(20.0, q1));
@@ -906,7 +933,7 @@
       return circle(20.0, q);
     }
     
-    float with_outer(vec2 q, out float x) {
+    float with_outer2(vec2 q, out float x) {
       {
         vec2 q1 = q - vec2(10.0, 20.0);
         return with_inner(q1, x);
@@ -915,9 +942,9 @@
     
     float distance(vec2 q) {
       return with_outer(q);
-      return with_outer(q);
+      return with_outer1(q);
       float x = 0.0;
-      return with_outer(q, x);
+      return with_outer2(q, x);
     }
   `))
 
