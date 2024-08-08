@@ -768,6 +768,47 @@
     }
   `))
 
+(deftest "dynamic variables are only set during a with call"
+  (def p (variable/new "p" type/vec3))
+  (test-function
+    (jlsl/defn :float main []
+      (with [p [0 0 0]]
+        (return p))
+      (return p)) `
+    float main(vec3 p) {
+      {
+        vec3 p1 = vec3(0.0, 0.0, 0.0);
+        return p1;
+      }
+      return p;
+    }
+  `))
+
+# this test is here so that we don't naively remove the creation of a new subscope in with.
+# we have to do something more complicated and distinguish "logical" and "physical" scopes
+# when we're rendering a function
+(deftest "with reserves symbols in the current glsl lexical scope even though it does not create a block"
+  (def p (variable/new "p" type/vec3))
+  (test-function
+    (jlsl/defn :float main []
+      (with [p [0 0 0]]
+        (return p))
+      (with [p [0 0 0]]
+        (return p))
+      (return p)) `
+    float main(vec3 p) {
+      {
+        vec3 p1 = vec3(0.0, 0.0, 0.0);
+        return p1;
+      }
+      {
+        vec3 p1 = vec3(0.0, 0.0, 0.0);
+        return p1;
+      }
+      return p;
+    }
+  `))
+
 
 (deftest "increment/decrement statements"
   (test-function
