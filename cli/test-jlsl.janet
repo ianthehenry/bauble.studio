@@ -88,11 +88,10 @@
     (defn :vec3 calculate-normal []
       (def step (vec2 NORMAL_OFFSET 0))
       (var x (nearest-distance))
-      (var offset (vec3 0))
-      (with [p (- p (. step xyy))] (set (. offset x) (nearest-distance)))
-      (with [p (- p (. step yxy))] (set (. offset y) (nearest-distance)))
-      (with [p (- p (. step yyx))] (set (. offset z) (nearest-distance)))
-      (return (normalize (- (vec3 x) offset))))
+      (return (normalize (- (vec3 x)
+        [(with [p (- p (. step xyy))] (nearest-distance))
+         (with [p (- p (. step yxy))] (nearest-distance))
+         (with [p (- p (. step yyx))] (nearest-distance))]))))
 
     (defn :vec3 nearest-color []
       (var normal (calculate-normal))
