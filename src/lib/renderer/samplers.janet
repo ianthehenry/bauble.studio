@@ -12,7 +12,7 @@
 (jlsl/jlsl/defdyn crosshairs-3d :vec4 "")
 
 # TODO: these should probably be somewhere else
-(def- MAX_STEPS 256:u)
+(def- MAX_STEPS 64:u)
 (def- MINIMUM_HIT_DISTANCE 0.1)
 (def- MAXIMUM_HIT_DISTANCE 10)
 (def- MAXIMUM_TRACE_DISTANCE (* 64 1024))
