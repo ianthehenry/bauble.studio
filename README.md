@@ -136,6 +136,11 @@ Currently the CLI is the only way to export high-resolution images, render image
 # embeditor
 
 ```
-DEST=$HOME/src/ianthehenry.com/content/posts/worley
+DEST=$HOME/src/ianthehenry.com/content/posts/bauble/01
 BUILD_MODE=dev redo studio/styles/embeditor.css build/embeditor.js && cp studio/styles/embeditor.css $DEST/bauble.css && cp build/embeditor.js $DEST/bauble.js && cp studio/assets/icons.svg $DEST/icons.svg
+```
+
+```
+DEST=$HOME/src/ianthehenry.com/content/posts/worley
+BUILD_MODE=dev redo studio/styles/embeditor.css build/embeditor2.js && cp studio/styles/embeditor.css $DEST/bauble.css && cp build/embeditor2.js $DEST/bauble.js && cp studio/assets/icons.svg $DEST/icons.svg
 ```
